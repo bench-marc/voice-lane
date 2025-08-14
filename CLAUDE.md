@@ -42,19 +42,21 @@ This is an AI Voice Agent application that acts like a natural caller, implement
 - **Ruby gems**: httparty, json, ffi, pry, rspec
 - **System tools**: sox, ffmpeg, espeak, portaudio
 - **Python packages**: openai-whisper (via pipx), webrtcvad (in venv/)
-- **AI backend**: Ollama with qwen3:8b model (configurable in OllamaClient)
+- **AI backend**: Ollama with phi3:mini model (configurable in OllamaClient)
 
 ## Configuration
 
 ### Ollama Model Configuration
-Default model is `qwen3:8b`. To change:
-1. Edit `lib/ollama_client.rb`, line 6: `@model = 'your-model-name'`
+Default model is `phi3:mini` (optimized for speed). To change:
+1. Edit `lib/ollama_client.rb`, line 8: `@model = 'your-model-name'`
 2. Ensure model is available: `ollama pull your-model-name`
 
 ### Audio Settings
 - Recording duration: 5 seconds (configurable in AudioProcessor)
 - Sample rate: 16kHz for compatibility with Whisper and VAD
-- Whisper model: 'base' (configurable for speed vs accuracy tradeoffs)
+- Whisper model: 'tiny' (optimized for speed, configurable for accuracy tradeoffs)
+- Audio filtering: 300-3400Hz bandpass for human voice optimization
+- TTS voice: Samantha (macOS) with 180 WPM rate
 
 ## Project Structure
 
@@ -82,7 +84,7 @@ voice-lane/
 - macOS with microphone access
 - Homebrew package manager
 - Ollama installed and running
-- At least 4GB RAM for qwen3:8b model
+- At least 2GB RAM for phi3:mini model
 
 ## Development Notes
 
@@ -91,6 +93,9 @@ voice-lane/
 - Conversation context is maintained across turns with configurable history length
 - Both blocking (simple) and non-blocking (advanced) interaction modes supported
 - Error handling includes fallbacks (e.g., say command if espeak fails)
+- Audio optimization: Uses sox for recording with noise filtering and normalization
+- Whisper uses 'tiny' model for 4x faster processing than 'base' with acceptable accuracy
+- AI responses are cleaned of thinking tokens and XML artifacts before TTS
 
 ## Testing Strategy
 
