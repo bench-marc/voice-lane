@@ -1,0 +1,34 @@
+# Temporary files
+tmp/
+*.tmp
+*.log
+
+# Audio files
+*.wav
+*.mp3
+*.m4a
+
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Ruby
+.bundle/
+vendor/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets and config
+.env
+config/*.yml
+config/*.yaml
+!config/.keep
+
+# Whisper models cache (these are large)
+~/.cache/whisper/

@@ -1,0 +1,47 @@
+#!/usr/bin/env ruby
+
+require_relative '../lib/voice_agent'
+require_relative '../lib/simple_voice_agent'
+
+# Simple option parsing
+mode = ARGV[0] || 'simple'
+
+case mode
+when 'simple'
+  puts "Starting Simple Voice Agent (push-to-talk mode)..."
+  SimpleVoiceAgent.new.start
+when 'advanced'
+  puts "Starting Advanced Voice Agent (continuous listening)..."
+  VoiceAgent.new.start
+when 'help', '--help', '-h'
+  puts <<~HELP
+    Ruby AI Voice Agent
+    
+    Usage: #{$0} [mode]
+    
+    Modes:
+      simple    - Push-to-talk mode (default, recommended for testing)
+      advanced  - Continuous listening mode
+      help      - Show this help message
+    
+    Examples:
+      #{$0} simple     # Start in push-to-talk mode
+      #{$0} advanced   # Start in continuous listening mode
+      #{$0} help       # Show this help
+    
+    Controls:
+      Simple mode: Press Enter to record, type 'quit' to exit
+      Advanced mode: Just speak naturally, say 'stop listening' to exit
+      Both modes: Ctrl+C for emergency stop
+    
+    Requirements:
+      - Ollama running with qwen3:8b model (or edit lib/ollama_client.rb)
+      - Microphone access granted to Terminal
+      - Audio tools installed (sox, espeak, whisper)
+  HELP
+else
+  puts "Unknown mode: #{mode}"
+  puts "Usage: #{$0} [simple|advanced|help]"
+  puts "Run '#{$0} help' for more information"
+  exit 1
+end

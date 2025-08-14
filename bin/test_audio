@@ -1,0 +1,83 @@
+#!/bin/bash
+
+echo "🎙️ Testing Audio System for Ruby Voice Agent"
+echo "============================================"
+
+# Test recording
+echo "1️⃣  Testing audio recording with sox..."
+if command -v sox &> /dev/null; then
+    echo "✅ Sox is installed"
+    echo "🎤 Recording 3 seconds of audio (speak now)..."
+    sox -d test_recording.wav trim 0 3
+    if [ -f test_recording.wav ]; then
+        echo "✅ Recording successful"
+        echo "🔊 Playing back recording..."
+        play test_recording.wav
+        rm test_recording.wav
+    else
+        echo "❌ Recording failed"
+    fi
+else
+    echo "❌ Sox not found. Please install with: brew install sox"
+fi
+
+echo ""
+
+# Test TTS
+echo "2️⃣  Testing text-to-speech with espeak..."
+if command -v espeak &> /dev/null; then
+    echo "✅ Espeak is installed"
+    echo "🔊 Testing TTS..."
+    espeak "Hello, this is a test of the Ruby voice agent text to speech system"
+else
+    echo "⚠️  Espeak not found. Trying macOS say command..."
+    if command -v say &> /dev/null; then
+        echo "✅ Using macOS say command"
+        say "Hello, this is a test of the Ruby voice agent text to speech system"
+    else
+        echo "❌ No TTS system found"
+    fi
+fi
+
+echo ""
+
+# Test Whisper
+echo "3️⃣  Testing Whisper installation..."
+if command -v ~/.local/bin/whisper &> /dev/null; then
+    echo "✅ Whisper is installed"
+else
+    echo "❌ Whisper not found at ~/.local/bin/whisper"
+    echo "   Try running: pipx install openai-whisper"
+fi
+
+echo ""
+
+# Test Ollama
+echo "4️⃣  Testing Ollama connection..."
+if curl -s http://localhost:11434/api/tags > /dev/null; then
+    echo "✅ Ollama is running"
+    echo "📋 Available models:"
+    curl -s http://localhost:11434/api/tags | grep -o '"name":"[^"]*"' | cut -d'"' -f4
+else
+    echo "❌ Ollama is not running or not accessible"
+    echo "   Try running: ollama serve"
+fi
+
+echo ""
+
+# Test Python VAD
+echo "5️⃣  Testing Python VAD setup..."
+if [ -f venv/bin/python ]; then
+    echo "✅ Python virtual environment found"
+    if venv/bin/python -c "import webrtcvad" &> /dev/null; then
+        echo "✅ webrtcvad is installed"
+    else
+        echo "❌ webrtcvad not found in virtual environment"
+    fi
+else
+    echo "❌ Python virtual environment not found"
+fi
+
+echo ""
+echo "🏁 Audio test complete!"
+echo "If all tests passed, you're ready to run: ./bin/start_agent simple"
