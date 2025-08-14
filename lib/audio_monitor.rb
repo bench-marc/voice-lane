@@ -65,9 +65,12 @@ class AudioMonitor
     @recording = true
     puts "🗣️ Speech detected, recording full utterance..."
     
+    # Brief delay to ensure we capture the complete response
+    sleep(0.3)
+    
     begin
       # Record longer segment for full utterance
-      full_audio = @audio_processor.record_audio(5)
+      full_audio = @audio_processor.record_audio(8)
       
       if full_audio
         text = @audio_processor.speech_to_text(full_audio)

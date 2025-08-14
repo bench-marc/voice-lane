@@ -5,7 +5,7 @@ class OllamaClient
   include HTTParty
   base_uri 'http://localhost:11434'
 
-  def initialize(model = 'phi3:mini')
+  def initialize(model = 'hf.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q2_K')
     @model = model
     @conversation_history = []
   end
@@ -17,7 +17,7 @@ class OllamaClient
     
     # Build context from conversation history
     context = build_context
-    
+    pp context
     begin
       response = self.class.post('/api/generate', {
         body: {
@@ -26,7 +26,7 @@ class OllamaClient
           stream: false,
           options: {
             temperature: 0.7,
-            num_predict: 100
+            num_predict: 100  # Increased to prevent truncation
           }
         }.to_json,
         headers: { 'Content-Type' => 'application/json' },
@@ -37,8 +37,13 @@ class OllamaClient
         result = JSON.parse(response.body)
         ai_response = result['response'].strip
         
+        puts "DEBUG: Raw LLM response: '#{ai_response}'" if ENV['DEBUG']
+        
         # Clean up thinking tokens and other artifacts
         clean_response = clean_ai_response(ai_response)
+        
+        puts "DEBUG: After cleaning: '#{clean_response}'" if ENV['DEBUG']
+        puts "DEBUG: Clean response empty? #{clean_response.empty?}" if ENV['DEBUG']
         
         unless clean_response.empty?
           @conversation_history << { role: 'assistant', content: clean_response }
@@ -49,7 +54,9 @@ class OllamaClient
           end
         end
         
-        return clean_response.empty? ? "I apologize, I need to think about that a bit more." : clean_response
+        final_response = clean_response.empty? ? "I apologize, I need to think about that a bit more." : clean_response
+        puts "DEBUG: Final response: '#{final_response}'" if ENV['DEBUG']
+        return final_response
       else
         puts "Ollama HTTP error: #{response.code} - #{response.message}"
         return "Sorry, I'm having trouble connecting to the AI service."
@@ -70,6 +77,10 @@ class OllamaClient
     @conversation_history.length
   end
 
+  def conversation_history
+    @conversation_history
+  end
+
   private
 
   def clean_ai_response(response)
@@ -77,19 +88,13 @@ class OllamaClient
     
     # Remove thinking tokens and other artifacts
     clean = response.dup
-    
-    # Remove thinking blocks
-    clean = clean.gsub(/<think>.*?<\/think>/m, '')
-    clean = clean.gsub(/<think>.*$/m, '')
-    
-    # Remove any other XML-like tags that might appear
-    clean = clean.gsub(/<[^>]*>/, '')
-    
+
     # Clean up extra whitespace
     clean = clean.strip.squeeze(' ')
     
-    # If the response is too short or seems incomplete, return empty
-    if clean.length < 3 || clean.match?(/^\W*$/)
+    # If response starts with actual dialogue or action, keep it
+    # Only filter if completely empty, just meta-commentary, or just punctuation
+    if clean.empty? || clean.match?(/^\s*[^\w]*\s*$/) || clean.match?(/^(Okay|Let's|The user|I need|As \w+)/i)
       return ""
     end
     

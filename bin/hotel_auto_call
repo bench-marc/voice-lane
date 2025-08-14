@@ -1,0 +1,64 @@
+#!/usr/bin/env ruby
+
+require_relative '../lib/hotel_auto_voice_agent'
+
+# Simple option parsing
+if ARGV.include?('--help') || ARGV.include?('-h')
+  puts <<~HELP
+    Lanes&Planes Automatic Voice Hotel Booking Agent
+    
+    Usage: #{$0} [options]
+    
+    Options:
+      --guest "Name"           Guest name for the booking
+      --booking "REF123"       Booking reference number  
+      --hotel "Hotel Name"     Hotel name
+      --help, -h               Show this help
+    
+    Example:
+      #{$0} --guest "John Smith" --booking "LP-2024-001" --hotel "Grand Hotel"
+    
+    This starts a FULLY AUTOMATIC voice call where:
+    - AI speaks first with introduction
+    - AI automatically listens for responses (no button pressing!)
+    - AI responds immediately when hotel staff stops talking
+    - Call continues automatically until objectives are met
+    - Very brief, direct responses only
+    
+    Just run it and let the AI handle the entire conversation!
+  HELP
+  exit 0
+end
+
+# Parse command line arguments
+guest_name = nil
+booking_reference = nil
+hotel_name = nil
+
+i = 0
+while i < ARGV.length
+  case ARGV[i]
+  when '--guest'
+    guest_name = ARGV[i + 1]
+    i += 2
+  when '--booking'
+    booking_reference = ARGV[i + 1]
+    i += 2
+  when '--hotel'
+    hotel_name = ARGV[i + 1]
+    i += 2
+  else
+    i += 1
+  end
+end
+
+puts "🚀 Starting fully automatic hotel booking call..."
+puts "💡 The AI will handle everything - no interaction needed!"
+
+# Start the automatic voice hotel booking agent
+agent = HotelAutoVoiceAgent.new
+agent.start_auto_call(
+  guest_name: guest_name,
+  booking_reference: booking_reference,
+  hotel_name: hotel_name
+)

@@ -1,0 +1,55 @@
+#!/usr/bin/env ruby
+
+require_relative '../lib/hotel_booking_agent'
+
+# Simple option parsing
+if ARGV.include?('--help') || ARGV.include?('-h')
+  puts <<~HELP
+    Lanes&Planes Hotel Booking Agent
+    
+    Usage: #{$0} [options]
+    
+    Options:
+      --guest "Name"           Guest name for the booking
+      --booking "REF123"       Booking reference number
+      --hotel "Hotel Name"     Hotel name
+      --help, -h               Show this help
+    
+    Example:
+      #{$0} --guest "John Smith" --booking "LP-2024-001" --hotel "Grand Hotel"
+    
+    This will start a phone call simulation where the AI acts as a Lanes&Planes
+    employee calling the hotel to confirm cost coverage for the guest booking.
+  HELP
+  exit 0
+end
+
+# Parse command line arguments
+guest_name = nil
+booking_reference = nil
+hotel_name = nil
+
+i = 0
+while i < ARGV.length
+  case ARGV[i]
+  when '--guest'
+    guest_name = ARGV[i + 1]
+    i += 2
+  when '--booking'
+    booking_reference = ARGV[i + 1]
+    i += 2
+  when '--hotel'
+    hotel_name = ARGV[i + 1]
+    i += 2
+  else
+    i += 1
+  end
+end
+
+# Start the hotel booking agent
+agent = HotelBookingAgent.new
+agent.start_call(
+  guest_name: guest_name,
+  booking_reference: booking_reference,
+  hotel_name: hotel_name
+)
