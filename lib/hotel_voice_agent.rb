@@ -12,7 +12,7 @@ class HotelVoiceAgent
     puts "\n" + "="*60
     puts "📞 LANES&PLANES VOICE HOTEL BOOKING AGENT"
     puts "="*60
-    puts "🎤 Voice-enabled hotel cost coverage confirmation"
+    puts "🎤 Voice-enabled hotel cost coverage confirmation (Hotel speaks first)"
     puts "👤 Guest: #{guest_name}" if guest_name
     puts "📋 Booking: #{booking_reference}" if booking_reference
     puts "🏨 Hotel: #{hotel_name}" if hotel_name
@@ -33,14 +33,8 @@ class HotelVoiceAgent
     # Wait for user to indicate call is connected
     print "Press Enter when hotel answers the phone: "
     STDIN.gets
-
-    # Generate and speak opening statement
-    opening = @ollama_client.generate_opening_statement
-    puts "🤖 Agent: #{opening}"
-    speak_response(opening)
     
-    # Add opening statement to conversation history
-    @ollama_client.add_assistant_message(opening)
+    puts "🎤 The hotel will speak first, then the agent will respond..."
 
     # Start voice conversation loop
     voice_conversation_loop
@@ -64,6 +58,17 @@ class HotelVoiceAgent
         
         if hotel_response && hotel_response.length > 2
           puts "🏨 Hotel: #{hotel_response}"
+          
+          # If this is the first message (hotel greeting), generate opening response
+          if @ollama_client.conversation_length == 0
+            opening = @ollama_client.generate_opening_statement
+            puts "🤖 Agent: #{opening}"
+            speak_response(opening)
+            
+            # Add opening statement to conversation history
+            @ollama_client.add_assistant_message(opening)
+            next
+          end
           
           # Check for call end
           if hotel_response.downcase.match?(/(goodbye|thank you|have a|good day|bye)/)

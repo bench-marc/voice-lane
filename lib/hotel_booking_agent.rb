@@ -12,7 +12,7 @@ class HotelBookingAgent
     puts "\n" + "="*60
     puts "📞 LANES&PLANES HOTEL BOOKING AGENT"
     puts "="*60
-    puts "🏨 Calling hotel to confirm cost coverage"
+    puts "🏨 Calling hotel to confirm cost coverage (Hotel speaks first)"
     puts "👤 Guest: #{guest_name}" if guest_name
     puts "📋 Booking: #{booking_reference}" if booking_reference
     puts "🏨 Hotel: #{hotel_name}" if hotel_name
@@ -25,15 +25,7 @@ class HotelBookingAgent
       hotel_name: hotel_name
     )
 
-    # Generate opening statement
-    opening = @ollama_client.generate_opening_statement
-    puts "🤖 Agent: #{opening}"
-    @audio_processor.text_to_speech(opening)
-    
-    # Add opening statement to conversation history
-    @ollama_client.add_assistant_message(opening)
-
-    # Start conversation loop
+    # Start conversation loop (hotel speaks first)
     conversation_loop
   end
 
@@ -45,6 +37,17 @@ class HotelBookingAgent
       hotel_response = STDIN.gets.chomp
 
       break if hotel_response.downcase.include?('end call') || hotel_response.downcase.include?('goodbye')
+
+      # # If this is the first message (hotel greeting), generate opening response
+      # if @ollama_client.conversation_length == 0
+      #   opening = @ollama_client.generate_opening_statement
+      #   puts "🤖 Agent: #{opening}"
+      #   @audio_processor.text_to_speech(opening)
+      #
+      #   # Add opening statement to conversation history
+      #   @ollama_client.add_assistant_message(opening)
+      #   next
+      # end
 
       # Process hotel response and generate agent reply
       response = @ollama_client.generate_response(hotel_response)
@@ -171,11 +174,10 @@ class HotelBookingOllamaClient < OllamaClient
     recent_history = @conversation_history.last(6)
     recent_history.each do |msg|
       role = msg[:role] == 'user' ? 'Hotel Staff' : 'You'
-      context += "\"#{role}: #{msg[:content]}\"\n"
+      context += "#{role}: \"#{msg[:content]}\"\n"
     end
     context += "\n\n"
-    context += "Read the conversation history for context.\n"
-    context += "Please react ONLY to the last message from Hotel staff!"
+    context += "You: "
     context
   end
 
@@ -220,6 +222,7 @@ CONVERSATION STYLE:
     details += "\n- Guest: #{@booking_details[:guest_name]}" if @booking_details[:guest_name]
     details += "\n- Reference: #{@booking_details[:booking_reference]}" if @booking_details[:booking_reference]  
     details += "\n- Hotel: #{@booking_details[:hotel_name]}" if @booking_details[:hotel_name]
+    details += "\n- Dates: #{@booking_details[:check_in]}" if @booking_details[:check_in]
     details
   end
 end

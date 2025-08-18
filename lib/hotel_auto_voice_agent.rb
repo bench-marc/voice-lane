@@ -27,7 +27,7 @@ class HotelAutoVoiceAgent
     puts "📋 Booking: #{booking_reference}" if booking_reference
     puts "🏨 Hotel: #{hotel_name}" if hotel_name
     puts "="*60
-    puts "🔊 Agent will speak first, then listen automatically"
+    puts "🎤 Agent will listen first for hotel greeting, then respond"
     puts "⏹️  Say 'end call' or press Ctrl+C to stop"
     puts "="*60 + "\n"
 
@@ -43,18 +43,12 @@ class HotelAutoVoiceAgent
     # Calibrate microphone for better voice detection
     @audio_processor.calibrate_microphone
     
-    # Wait a moment then start the call
+    # Wait a moment then start listening
     sleep(1)
     
-    # Generate and speak opening statement
-    opening = @ollama_client.generate_opening_statement
-    puts "🤖 Agent: #{opening}"
-    speak_response(opening)
+    puts "🎤 Waiting for hotel staff to answer the phone..."
     
-    # Add opening statement to conversation history
-    @ollama_client.add_assistant_message(opening)
-    
-    # Start automatic listening
+    # Start automatic listening first
     @audio_monitor.start_listening
     
     # Keep call active
@@ -99,6 +93,17 @@ class HotelAutoVoiceAgent
     return if @speaking || !@call_active || text.nil? || text.strip.empty?
     
     puts "🏨 Hotel: #{text}"
+    
+    # If this is the first message (hotel greeting), generate opening response
+    # if @ollama_client.conversation_length == 0
+    #   opening = @ollama_client.generate_opening_statement
+    #   puts "🤖 Agent: #{opening}"
+    #   speak_response(opening)
+    #
+    #   # Add opening statement to conversation history
+    #   @ollama_client.add_assistant_message(opening)
+    #   return
+    # end
     
     # Check for call end signals
     if text.downcase.match?(/(goodbye|thank you.*day|have a good|bye|end.*call)/)
