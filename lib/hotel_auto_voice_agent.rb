@@ -132,7 +132,7 @@ class HotelAutoVoiceAgent
       speak_response(agent_reply)
       
       # Check if LLM wants to end conversation or has confirmed coverage
-      if false # response[:end_conversation] || response[:coverage_confirmed] == true
+      if response[:end_conversation] || response[:coverage_confirmed] == true
         puts "\n✅ Call objectives completed based on LLM assessment!"
         confirmation = "Perfect, Lanes&Planes will be billed directly. Thank you!"
         puts "🤖 Agent: #{confirmation}"
@@ -162,8 +162,6 @@ class HotelAutoVoiceAgent
     
     begin
       @audio_processor.text_to_speech(text)
-      # Small pause after speaking to allow for natural conversation flow
-      sleep(0.5)
     rescue => e
       puts "TTS error: #{e.message}"
     ensure
