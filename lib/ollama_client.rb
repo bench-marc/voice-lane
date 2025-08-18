@@ -5,7 +5,7 @@ class OllamaClient
   include HTTParty
   base_uri 'http://localhost:11434'
 
-  def initialize(model = 'hf.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q2_K')
+  def initialize(model = 'hf.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q4_K_M')
     @model = model
     @conversation_history = []
   end

@@ -27,6 +27,9 @@ class HotelVoiceAgent
       hotel_name: hotel_name
     )
 
+    # Calibrate microphone for better voice detection
+    @audio_processor.calibrate_microphone
+    
     # Wait for user to indicate call is connected
     print "Press Enter when hotel answers the phone: "
     STDIN.gets
@@ -47,12 +50,12 @@ class HotelVoiceAgent
 
   def voice_conversation_loop
     loop do
-      puts "\n🎤 Listening for hotel response... (Press Enter to record)"
+      puts "\n🎤 Ready to listen for hotel response... (Press Enter to start)"
       STDIN.gets
 
-      # Record hotel response
-      puts "🎤 Recording hotel response (5 seconds)..."
-      audio_file = @audio_processor.record_audio(5)
+      # Record hotel response using smart recording
+      puts "🎤 Recording hotel response (will stop when you finish talking)..."
+      audio_file = @audio_processor.record_until_silence
       
       if audio_file
         puts "🔄 Processing speech..."

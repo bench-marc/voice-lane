@@ -1,9 +1,10 @@
 require_relative 'audio_processor'
 
 class AudioMonitor
-  def initialize(callback)
+  def initialize(callback, speaking_callback = nil)
     @audio_processor = AudioProcessor.new
     @callback = callback
+    @speaking_callback = speaking_callback
     @listening = false
     @recording = false
     @monitor_thread = nil
@@ -21,7 +22,8 @@ class AudioMonitor
           # Record short chunks and check for speech
           audio_file = record_chunk
           
-          if audio_file && has_speech?(audio_file)
+          # Only process speech if agent is not currently speaking
+          if audio_file && has_speech?(audio_file) && !agent_speaking?
             handle_speech_detected(audio_file)
           end
           
@@ -63,14 +65,11 @@ class AudioMonitor
     return if @recording
     
     @recording = true
-    puts "🗣️ Speech detected, recording full utterance..."
-    
-    # Brief delay to ensure we capture the complete response
-    sleep(0.3)
+    puts "🗣️ Speech detected, recording until silence..."
     
     begin
-      # Record longer segment for full utterance
-      full_audio = @audio_processor.record_audio(8)
+      # Use smart recording that automatically detects when speaker finishes
+      full_audio = @audio_processor.record_until_silence
       
       if full_audio
         text = @audio_processor.speech_to_text(full_audio)
@@ -98,5 +97,11 @@ class AudioMonitor
         puts "Warning: Could not delete temp file #{file_path}: #{e.message}"
       end
     end
+  end
+
+  def agent_speaking?
+    # Check if agent is currently speaking
+    return false unless @speaking_callback
+    @speaking_callback.call
   end
 end

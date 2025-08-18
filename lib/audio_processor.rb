@@ -130,6 +130,63 @@ class AudioProcessor
     puts "Text-to-speech error: #{e.message}"
   end
 
+  def record_until_silence
+    """
+    Record audio until speaker stops talking using voice activity detection
+    Returns the path to the recorded audio file
+    """
+    puts "🎤 Recording until silence detected..."
+    
+    # Use Python smart audio recorder
+    python_script = File.join(__dir__, 'smart_audio_recorder.py')
+    
+    begin
+      venv_python = File.expand_path('../venv_smart_audio/bin/python', __dir__)
+      python_cmd = File.exist?(venv_python) ? venv_python : 'python3'
+      result = `"#{python_cmd}" "#{python_script}" record 2>&1`
+      
+      if $?.success?
+        # Extract JSON from the last line of output
+        lines = result.strip.split("\n")
+        json_line = lines.last
+        
+        begin
+          parsed_result = JSON.parse(json_line)
+          if parsed_result['status'] == 'success'
+            file_path = parsed_result['file']
+            puts "✅ Smart recording complete: #{file_path}"
+            return file_path
+          else
+            puts "❌ Smart recording failed: #{parsed_result['message']}"
+            return nil
+          end
+        rescue JSON::ParserError => e
+          puts "❌ Failed to parse JSON from last line: #{json_line}"
+          puts "Full output: #{result}"
+          return nil
+        end
+      else
+        puts "❌ Python recorder failed: #{result}"
+        return nil
+      end
+    rescue => e
+      puts "❌ Recording error: #{e.message}"
+      return nil
+    end
+  end
+
+  def calibrate_microphone
+    """
+    Calibrate microphone for ambient noise
+    """
+    puts "🎤 Calibrating microphone for ambient noise..."
+    
+    python_script = File.join(__dir__, 'smart_audio_recorder.py')
+    venv_python = File.expand_path('../venv_smart_audio/bin/python', __dir__)
+    python_cmd = File.exist?(venv_python) ? venv_python : 'python3'
+    system("\"#{python_cmd}\" \"#{python_script}\" calibrate")
+  end
+
   def has_speech?(audio_file)
     return false unless audio_file && File.exist?(audio_file)
     

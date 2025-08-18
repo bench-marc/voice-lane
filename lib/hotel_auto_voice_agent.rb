@@ -9,9 +9,10 @@ class HotelAutoVoiceAgent
     @speaking = false
     @call_active = false
     
-    # Create callback for audio monitor
+    # Create callbacks for audio monitor
     speech_callback = method(:handle_hotel_speech)
-    @audio_monitor = AudioMonitor.new(speech_callback)
+    speaking_callback = method(:agent_speaking?)
+    @audio_monitor = AudioMonitor.new(speech_callback, speaking_callback)
     
     # Set up signal handlers for graceful shutdown
     setup_signal_handlers
@@ -38,6 +39,9 @@ class HotelAutoVoiceAgent
     )
 
     @call_active = true
+    
+    # Calibrate microphone for better voice detection
+    @audio_processor.calibrate_microphone
     
     # Wait a moment then start the call
     sleep(1)
@@ -204,6 +208,10 @@ class HotelAutoVoiceAgent
 
   def call_objectives_met?
     self.class.call_objectives_met?(@ollama_client)
+  end
+
+  def agent_speaking?
+    @speaking
   end
 
   def setup_signal_handlers

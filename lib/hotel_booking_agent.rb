@@ -69,7 +69,7 @@ end
 
 class HotelBookingOllamaClient < OllamaClient
   def initialize
-    super('hf.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q2_K')  # Use more capable model for better instruction following
+    super('hf.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF:Q4_K_M')  # Use more capable model for better instruction following
     @booking_details = {}
   end
 
@@ -166,15 +166,16 @@ class HotelBookingOllamaClient < OllamaClient
     
     context = build_hotel_context(details)
 
-    context += "History of conversation: \nCONVERSATION START\n"
+    context += "CONVERSATION HISTORY\n"
     # Use recent conversation history
     recent_history = @conversation_history.last(6)
     recent_history.each do |msg|
       role = msg[:role] == 'user' ? 'Hotel Staff' : 'You'
-      context += "#{role}: #{msg[:content]}\n"
+      context += "\"#{role}: #{msg[:content]}\"\n"
     end
-    context += "CONVERSATION END\n"
-    context += "Please react only to the last message from Hotel staff now!"
+    context += "\n\n"
+    context += "Read the conversation history for context.\n"
+    context += "Please react ONLY to the last message from Hotel staff!"
     context
   end
 
@@ -205,8 +206,9 @@ CONVERSATION STYLE:
 - Professional and focused
 - One question at a time
 - Maximum 2 sentences per response  
-- React directly to what hotel staff just said
-- Stay persistent until you get clear confirmation
+- Read the conversation history for context
+- Please react ONLY to the last message from Hotel staff
+- Stay persistent until you get clear confirmation or rejection about the cost coverage
 
 "
   end
