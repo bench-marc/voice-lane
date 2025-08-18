@@ -47,6 +47,9 @@ class HotelAutoVoiceAgent
     puts "🤖 Agent: #{opening}"
     speak_response(opening)
     
+    # Add opening statement to conversation history
+    @ollama_client.add_assistant_message(opening)
+    
     # Start automatic listening
     @audio_monitor.start_listening
     
@@ -107,14 +110,27 @@ class HotelAutoVoiceAgent
     end
 
     # Generate agent response
-    agent_reply = @ollama_client.generate_response(text)
+    response = @ollama_client.generate_response(text)
+    agent_reply = response[:message]
     
     # Debug output
     puts "DEBUG: Raw agent reply: '#{agent_reply}'" if ENV['DEBUG']
+    puts "DEBUG: Coverage confirmed: #{response[:coverage_confirmed]}" if ENV['DEBUG']
+    puts "DEBUG: End conversation: #{response[:end_conversation]}" if ENV['DEBUG']
     
     if agent_reply && !agent_reply.empty? && agent_reply != "I apologize, I need to think about that a bit more."
       puts "🤖 Agent: #{agent_reply}"
       speak_response(agent_reply)
+      
+      # Check if LLM wants to end conversation or has confirmed coverage
+      if false # response[:end_conversation] || response[:coverage_confirmed] == true
+        puts "\n✅ Call objectives completed based on LLM assessment!"
+        confirmation = "Perfect, Lanes&Planes will be billed directly. Thank you!"
+        puts "🤖 Agent: #{confirmation}"
+        speak_response(confirmation)
+        stop_call
+        return
+      end
     else
       # Better fallback based on context
       if text.downcase.include?('hello') || text.downcase.include?('there')
@@ -165,7 +181,7 @@ class HotelAutoVoiceAgent
 
   def self.call_objectives_met?(ollama_client)
     return false # do a real check here
-    
+
     conversation = ollama_client.conversation_history
     return false if conversation.length < 6  # Need at least 3 real exchanges
     

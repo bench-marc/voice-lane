@@ -35,6 +35,9 @@ class HotelVoiceAgent
     opening = @ollama_client.generate_opening_statement
     puts "🤖 Agent: #{opening}"
     speak_response(opening)
+    
+    # Add opening statement to conversation history
+    @ollama_client.add_assistant_message(opening)
 
     # Start voice conversation loop
     voice_conversation_loop
@@ -71,12 +74,13 @@ class HotelVoiceAgent
           end
           
           # Generate agent response
-          agent_reply = @ollama_client.generate_response(hotel_response)
+          response = @ollama_client.generate_response(hotel_response)
+          agent_reply = response[:message]
           puts "🤖 Agent: #{agent_reply}"
           speak_response(agent_reply)
           
-          # Check if objectives are met
-          if HotelAutoVoiceAgent.call_objectives_met?(@ollama_client)
+          # Check if objectives are met or if LLM wants to end conversation
+          if response[:end_conversation] || response[:coverage_confirmed] == true
             puts "\n✅ Call objectives completed successfully!"
             
             # Generate confirmation statement

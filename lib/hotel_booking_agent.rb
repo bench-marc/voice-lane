@@ -29,6 +29,9 @@ class HotelBookingAgent
     opening = @ollama_client.generate_opening_statement
     puts "🤖 Agent: #{opening}"
     @audio_processor.text_to_speech(opening)
+    
+    # Add opening statement to conversation history
+    @ollama_client.add_assistant_message(opening)
 
     # Start conversation loop
     conversation_loop
@@ -44,12 +47,13 @@ class HotelBookingAgent
       break if hotel_response.downcase.include?('end call') || hotel_response.downcase.include?('goodbye')
 
       # Process hotel response and generate agent reply
-      agent_reply = @ollama_client.generate_response(hotel_response)
+      response = @ollama_client.generate_response(hotel_response)
+      agent_reply = response[:message]
       puts "🤖 Agent: #{agent_reply}"
       @audio_processor.text_to_speech(agent_reply)
 
-      # Check if objectives are met
-      if HotelAutoVoiceAgent.call_objectives_met?(@ollama_client)
+      # Check if objectives are met or if LLM wants to end conversation
+      if response[:end_conversation] || response[:coverage_confirmed] == true
         puts "\n✅ Call objectives completed successfully!"
         summary = @ollama_client.generate_call_summary
         puts "\n📋 Call Summary:"
@@ -86,6 +90,24 @@ class HotelBookingOllamaClient < OllamaClient
         model: @model,
         prompt: context,
         stream: false,
+        format: {
+          type: "object",
+          properties: {
+            message: {
+              type: "string",
+              description: "Your professional opening statement (maximum 2 sentences)"
+            },
+            coverage_confirmed: {
+              type: ["boolean", "null"],
+              description: "Always null for opening statement"
+            },
+            end_conversation: {
+              type: "boolean",
+              description: "Always false for opening statement"
+            }
+          },
+          required: ["message", "coverage_confirmed", "end_conversation"]
+        },
         options: {
           temperature: 0.3, # Lower temperature for more consistent professional responses
           num_predict: 100  # Increased to prevent truncation
@@ -97,7 +119,16 @@ class HotelBookingOllamaClient < OllamaClient
 
     if response.success?
       result = JSON.parse(response.body)
-      clean_ai_response(result['response'].strip)
+      ai_response = result['response'].strip
+      
+      begin
+        # Parse JSON response for opening statement
+        json_response = JSON.parse(ai_response)
+        json_response['message'] || "Hello, this is Alex from Lanes&Planes. I need to confirm cost coverage arrangements for booking #{@booking_details[:booking_reference]}."
+      rescue JSON::ParserError
+        # Fallback if not JSON
+        clean_ai_response(ai_response)
+      end
     else
       "Hello, this is Alex from Lanes&Planes. I need to confirm cost coverage arrangements for booking #{@booking_details[:booking_reference]}."
     end

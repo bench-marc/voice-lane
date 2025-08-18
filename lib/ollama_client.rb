@@ -24,6 +24,24 @@ class OllamaClient
           model: @model,
           prompt: context,
           stream: false,
+          format: {
+            type: "object",
+            properties: {
+              message: {
+                type: "string",
+                description: "Your professional response to the hotel staff (maximum 2 sentences)"
+              },
+              coverage_confirmed: {
+                type: "boolean",
+                description: "false unless hotel staff confirmed cost coverage in conversation history"
+              },
+              end_conversation: {
+                type: "boolean",
+                description: "true only if the conversation should end after this message"
+              }
+            },
+            required: ["message", "coverage_confirmed", "end_conversation"]
+          },
           options: {
             temperature: 0.7,
             num_predict: 100  # Increased to prevent truncation
@@ -39,33 +57,68 @@ class OllamaClient
         
         puts "DEBUG: Raw LLM response: '#{ai_response}'" if ENV['DEBUG']
         
-        # Clean up thinking tokens and other artifacts
-        clean_response = clean_ai_response(ai_response)
-        
-        puts "DEBUG: After cleaning: '#{clean_response}'" if ENV['DEBUG']
-        puts "DEBUG: Clean response empty? #{clean_response.empty?}" if ENV['DEBUG']
-        
-        unless clean_response.empty?
-          @conversation_history << { role: 'assistant', content: clean_response }
+        begin
+          # Parse the JSON response from LLM
+          json_response = JSON.parse(ai_response)
+          message = json_response['message']
+          coverage_confirmed = json_response['coverage_confirmed']
+          end_conversation = json_response['end_conversation']
           
-          # Keep conversation history manageable
-          if @conversation_history.length > 12
-            @conversation_history = @conversation_history.last(10)
+          puts "DEBUG: Parsed JSON - message: '#{message}', coverage: #{coverage_confirmed}, end: #{end_conversation}" if ENV['DEBUG']
+          
+          unless message.nil? || message.empty?
+            @conversation_history << { 
+              role: 'assistant', 
+              content: message,
+              metadata: {
+                coverage_confirmed: coverage_confirmed,
+                end_conversation: end_conversation
+              }
+            }
+            
+            # Keep conversation history manageable
+            if @conversation_history.length > 12
+              @conversation_history = @conversation_history.last(10)
+            end
           end
+          
+          return {
+            message: message || "I apologize, I need to think about that a bit more.",
+            coverage_confirmed: coverage_confirmed,
+            end_conversation: end_conversation || false
+          }
+        rescue JSON::ParserError => e
+          puts "DEBUG: JSON parse error: #{e.message}" if ENV['DEBUG']
+          # Fallback to old behavior if JSON parsing fails
+          clean_response = clean_ai_response(ai_response)
+          @conversation_history << { role: 'assistant', content: clean_response } unless clean_response.empty?
+          return {
+            message: clean_response.empty? ? "I apologize, I need to think about that a bit more." : clean_response,
+            coverage_confirmed: nil,
+            end_conversation: false
+          }
         end
-        
-        final_response = clean_response.empty? ? "I apologize, I need to think about that a bit more." : clean_response
-        puts "DEBUG: Final response: '#{final_response}'" if ENV['DEBUG']
-        return final_response
       else
         puts "Ollama HTTP error: #{response.code} - #{response.message}"
-        return "Sorry, I'm having trouble connecting to the AI service."
+        return {
+          message: "Sorry, I'm having trouble connecting to the AI service.",
+          coverage_confirmed: nil,
+          end_conversation: false
+        }
       end
     rescue Net::TimeoutError
-      return "Sorry, the request timed out. Please try again."
+      return {
+        message: "Sorry, the request timed out. Please try again.",
+        coverage_confirmed: nil,
+        end_conversation: false
+      }
     rescue => e
       puts "Ollama error: #{e.message}"
-      return "Sorry, there was an error processing your request."
+      return {
+        message: "Sorry, there was an error processing your request.",
+        coverage_confirmed: nil,
+        end_conversation: false
+      }
     end
   end
 
@@ -79,6 +132,10 @@ class OllamaClient
 
   def conversation_history
     @conversation_history
+  end
+
+  def add_assistant_message(message)
+    @conversation_history << { role: 'assistant', content: message }
   end
 
   private
