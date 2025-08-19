@@ -1,6 +1,6 @@
 require_relative 'audio_processor'
 require_relative 'hotel_booking_agent'
-require_relative 'audio_monitor'
+require_relative 'continuous_audio_monitor'
 
 class HotelAutoVoiceAgent
   def initialize
@@ -13,10 +13,10 @@ class HotelAutoVoiceAgent
     puts "🚀 Initializing TTS engine..."
     @audio_processor.start_kokoro_server
     
-    # Create callbacks for audio monitor
+    # Create callbacks for continuous audio monitor
     speech_callback = method(:handle_hotel_speech)
     speaking_callback = method(:agent_speaking?)
-    @audio_monitor = AudioMonitor.new(speech_callback, speaking_callback)
+    @audio_monitor = ContinuousAudioMonitor.new(speech_callback, speaking_callback)
     
     # Set up signal handlers for graceful shutdown
     setup_signal_handlers
@@ -48,21 +48,35 @@ class HotelAutoVoiceAgent
 
     @call_active = true
     
-    # Calibrate microphone for better voice detection
-    @audio_processor.calibrate_microphone
+    puts "🎤 Starting continuous listening for hotel staff..."
     
-    # Wait a moment then start listening
-    sleep(1)
+    # Start continuous audio monitoring
+    unless @audio_monitor.start_listening
+      puts "❌ Failed to start continuous audio monitoring"
+      return false
+    end
     
-    puts "🎤 Waiting for hotel staff to answer the phone..."
-    
-    # Start automatic listening first
-    @audio_monitor.start_listening
+    puts "🎤 System is now actively listening for hotel staff speech..."
+    puts "💬 The system will automatically respond when hotel staff speaks"
+    puts "⏹️  Press Ctrl+C to stop the call at any time"
+    puts ""
     
     # Keep call active
     begin
+      loop_count = 0
       while @call_active && @audio_monitor.listening?
         sleep(0.5)
+        loop_count += 1
+        
+        # Show activity indicator every 10 seconds
+        if loop_count % 20 == 0  # Every 10 seconds (20 * 0.5s)
+          status = @audio_monitor.get_status
+          if status
+            puts "🎤 Listening... (#{status['total_chunks']} audio chunks processed, #{status['processed_utterances']} speech events detected)"
+          else
+            puts "🎤 Listening... (waiting for hotel staff to speak)"
+          end
+        end
         
         # Check if objectives are met periodically
         if call_objectives_met? && @ollama_client.conversation_length >= 4
@@ -169,12 +183,17 @@ class HotelAutoVoiceAgent
     
     @speaking = true
     
+    # Notify audio monitor that agent is speaking
+    @audio_monitor.set_agent_speaking(true)
+    
     begin
       @audio_processor.text_to_speech(text)
     rescue => e
       puts "TTS error: #{e.message}"
     ensure
       @speaking = false
+      # Notify audio monitor that agent finished speaking
+      @audio_monitor.set_agent_speaking(false)
     end
   end
 
