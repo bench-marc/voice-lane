@@ -1,3 +1,5 @@
 SpeechRecognition>=3.10.0
 PyAudio>=0.2.11
 wave
+kokoro-tts>=0.9.2
+soundfile

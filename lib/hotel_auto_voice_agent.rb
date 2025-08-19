@@ -9,6 +9,10 @@ class HotelAutoVoiceAgent
     @speaking = false
     @call_active = false
     
+    # Start Kokoro TTS server for fast speech generation
+    puts "🚀 Initializing TTS engine..."
+    @audio_processor.start_kokoro_server
+    
     # Create callbacks for audio monitor
     speech_callback = method(:handle_hotel_speech)
     speaking_callback = method(:agent_speaking?)
@@ -85,6 +89,7 @@ class HotelAutoVoiceAgent
   def stop_call
     @call_active = false
     @audio_monitor.stop_listening
+    @audio_processor.stop_kokoro_server
   end
 
   private

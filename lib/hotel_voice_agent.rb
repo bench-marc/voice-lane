@@ -6,6 +6,10 @@ class HotelVoiceAgent
     @audio_processor = AudioProcessor.new
     @ollama_client = HotelBookingOllamaClient.new
     @speaking = false
+    
+    # Start Kokoro TTS server for fast speech generation
+    puts "🚀 Initializing TTS engine..."
+    @audio_processor.start_kokoro_server
   end
 
   def start_voice_call(guest_name: nil, booking_reference: nil, hotel_name: nil)

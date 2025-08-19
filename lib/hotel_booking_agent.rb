@@ -6,6 +6,10 @@ class HotelBookingAgent
     @audio_processor = AudioProcessor.new
     # Use specialized Ollama client for hotel booking context
     @ollama_client = HotelBookingOllamaClient.new
+    
+    # Start Kokoro TTS server for fast speech generation
+    puts "🚀 Initializing TTS engine..."
+    @audio_processor.start_kokoro_server
   end
 
   def start_call(guest_name: nil, booking_reference: nil, hotel_name: nil)
