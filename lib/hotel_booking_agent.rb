@@ -12,7 +12,7 @@ class HotelBookingAgent
     @audio_processor.start_kokoro_server
   end
 
-  def start_call(guest_name: nil, booking_reference: nil, hotel_name: nil)
+  def start_call(guest_name: nil, booking_reference: nil, hotel_name: nil, checkin_date: nil, checkout_date: nil)
     puts "\n" + "="*60
     puts "📞 LANES&PLANES HOTEL BOOKING AGENT"
     puts "="*60
@@ -20,13 +20,17 @@ class HotelBookingAgent
     puts "👤 Guest: #{guest_name}" if guest_name
     puts "📋 Booking: #{booking_reference}" if booking_reference
     puts "🏨 Hotel: #{hotel_name}" if hotel_name
+    puts "📅 Check-in: #{checkin_date}" if checkin_date
+    puts "📅 Check-out: #{checkout_date}" if checkout_date
     puts "="*60 + "\n"
 
     # Store booking details for context
     @ollama_client.set_booking_details(
       guest_name: guest_name,
       booking_reference: booking_reference,
-      hotel_name: hotel_name
+      hotel_name: hotel_name,
+      checkin_date: checkin_date,
+      checkout_date: checkout_date
     )
 
     # Start conversation loop (hotel speaks first)
@@ -80,11 +84,13 @@ class HotelBookingOllamaClient < OllamaClient
     @booking_details = {}
   end
 
-  def set_booking_details(guest_name: nil, booking_reference: nil, hotel_name: nil)
+  def set_booking_details(guest_name: nil, booking_reference: nil, hotel_name: nil, checkin_date: nil, checkout_date: nil)
     @booking_details = {
       guest_name: guest_name,
       booking_reference: booking_reference,
-      hotel_name: hotel_name
+      hotel_name: hotel_name,
+      checkin_date: checkin_date,
+      checkout_date: checkout_date
     }
   end
 
@@ -238,7 +244,8 @@ CONVERSATION STYLE:
     details += "\n- Guest: #{@booking_details[:guest_name]}" if @booking_details[:guest_name]
     details += "\n- Reference: #{@booking_details[:booking_reference]}" if @booking_details[:booking_reference]  
     details += "\n- Hotel: #{@booking_details[:hotel_name]}" if @booking_details[:hotel_name]
-    details += "\n- Dates: #{@booking_details[:check_in]}" if @booking_details[:check_in]
+    details += "\n- Check-in: #{@booking_details[:checkin_date]}" if @booking_details[:checkin_date]
+    details += "\n- Check-out: #{@booking_details[:checkout_date]}" if @booking_details[:checkout_date]
     details
   end
 end

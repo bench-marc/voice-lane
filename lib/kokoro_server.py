@@ -29,7 +29,7 @@ except ImportError as e:
 
 class TTSRequest(BaseModel):
     text: str
-    voice: str = "af_sarah"
+    voice: str = "af_aoede"
     speed: float = 1.0
 
 
@@ -105,7 +105,7 @@ class KokoroTTSServer:
                 "status": "success",
                 "voices": {
                     'male': ['am_adam', 'am_michael'],  
-                    'female': ['af_sarah', 'af_bella', 'af_alloy'],
+                    'female': ['af_sarah', 'af_bella', 'af_alloy', 'af_aoede'],
                     'neutral': ['af_heart']
                 }
             }
@@ -140,7 +140,7 @@ class KokoroTTSServer:
             # Warm up model with a dummy inference
             print("🔥 Warming up model...")
             dummy_text = "Test"
-            generator = self.pipeline(dummy_text, voice='af_sarah')
+            generator = self.pipeline(dummy_text, voice='af_aoede')
             
             # Process the generator to complete warmup
             for _ in generator:

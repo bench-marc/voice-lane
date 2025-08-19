@@ -13,10 +13,12 @@ if ARGV.include?('--help') || ARGV.include?('-h')
       --guest "Name"           Guest name for the booking
       --booking "REF123"       Booking reference number  
       --hotel "Hotel Name"     Hotel name
+      --checkin "YYYY-MM-DD"   Check-in date
+      --checkout "YYYY-MM-DD"  Check-out date
       --help, -h               Show this help
     
     Example:
-      #{$0} --guest "John Smith" --booking "LP-2024-001" --hotel "Grand Hotel"
+      #{$0} --guest "John Smith" --booking "LP-2024-001" --hotel "Grand Hotel" --checkin "2024-12-15" --checkout "2024-12-18"
     
     This starts a FULLY AUTOMATIC voice call where:
     - AI speaks first with introduction
@@ -34,6 +36,8 @@ end
 guest_name = nil
 booking_reference = nil
 hotel_name = nil
+checkin_date = nil
+checkout_date = nil
 
 i = 0
 while i < ARGV.length
@@ -46,6 +50,12 @@ while i < ARGV.length
     i += 2
   when '--hotel'
     hotel_name = ARGV[i + 1]
+    i += 2
+  when '--checkin'
+    checkin_date = ARGV[i + 1]
+    i += 2
+  when '--checkout'
+    checkout_date = ARGV[i + 1]
     i += 2
   else
     i += 1
@@ -60,5 +70,7 @@ agent = HotelAutoVoiceAgent.new
 agent.start_auto_call(
   guest_name: guest_name,
   booking_reference: booking_reference,
-  hotel_name: hotel_name
+  hotel_name: hotel_name,
+  checkin_date: checkin_date,
+  checkout_date: checkout_date
 )

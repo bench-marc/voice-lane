@@ -22,7 +22,7 @@ class HotelAutoVoiceAgent
     setup_signal_handlers
   end
 
-  def start_auto_call(guest_name: nil, booking_reference: nil, hotel_name: nil)
+  def start_auto_call(guest_name: nil, booking_reference: nil, hotel_name: nil, checkin_date: nil, checkout_date: nil)
     puts "\n" + "="*60
     puts "📞 LANES&PLANES AUTO VOICE HOTEL AGENT"
     puts "="*60
@@ -30,6 +30,8 @@ class HotelAutoVoiceAgent
     puts "👤 Guest: #{guest_name}" if guest_name
     puts "📋 Booking: #{booking_reference}" if booking_reference
     puts "🏨 Hotel: #{hotel_name}" if hotel_name
+    puts "📅 Check-in: #{checkin_date}" if checkin_date
+    puts "📅 Check-out: #{checkout_date}" if checkout_date
     puts "="*60
     puts "🎤 Agent will listen first for hotel greeting, then respond"
     puts "⏹️  Say 'end call' or press Ctrl+C to stop"
@@ -39,7 +41,9 @@ class HotelAutoVoiceAgent
     @ollama_client.set_booking_details(
       guest_name: guest_name,
       booking_reference: booking_reference,
-      hotel_name: hotel_name
+      hotel_name: hotel_name,
+      checkin_date: checkin_date,
+      checkout_date: checkout_date
     )
 
     @call_active = true

@@ -29,7 +29,7 @@ class KokoroTTS:
             # Available professional voices for business calls
             self.professional_voices = {
                 'male': ['am_adam', 'am_michael'],  
-                'female': ['af_sarah', 'af_bella', 'af_alloy'],
+                'female': ['af_bella', 'af_sarah', 'af_alloy'],  # af_bella is most natural
                 'neutral': ['af_heart']  # Often good for professional tone
             }
             
@@ -131,7 +131,7 @@ def main():
             sys.exit(1)
         
         text = sys.argv[2]
-        voice = sys.argv[3] if len(sys.argv) > 3 else 'af_sarah'
+        voice = sys.argv[3] if len(sys.argv) > 3 else 'af_aoede'
         speed = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
         output_file = sys.argv[5] if len(sys.argv) > 5 else None
         

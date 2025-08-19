@@ -12,7 +12,7 @@ class HotelVoiceAgent
     @audio_processor.start_kokoro_server
   end
 
-  def start_voice_call(guest_name: nil, booking_reference: nil, hotel_name: nil)
+  def start_voice_call(guest_name: nil, booking_reference: nil, hotel_name: nil, checkin_date: nil, checkout_date: nil)
     puts "\n" + "="*60
     puts "📞 LANES&PLANES VOICE HOTEL BOOKING AGENT"
     puts "="*60
@@ -20,6 +20,8 @@ class HotelVoiceAgent
     puts "👤 Guest: #{guest_name}" if guest_name
     puts "📋 Booking: #{booking_reference}" if booking_reference
     puts "🏨 Hotel: #{hotel_name}" if hotel_name
+    puts "📅 Check-in: #{checkin_date}" if checkin_date
+    puts "📅 Check-out: #{checkout_date}" if checkout_date
     puts "="*60
     puts "Press Enter when hotel staff answers, or 'quit' to exit"
     puts "="*60 + "\n"
@@ -28,7 +30,9 @@ class HotelVoiceAgent
     @ollama_client.set_booking_details(
       guest_name: guest_name,
       booking_reference: booking_reference,
-      hotel_name: hotel_name
+      hotel_name: hotel_name,
+      checkin_date: checkin_date,
+      checkout_date: checkout_date
     )
 
     # Calibrate microphone for better voice detection

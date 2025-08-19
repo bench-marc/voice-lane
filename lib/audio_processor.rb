@@ -19,7 +19,7 @@ class AudioProcessor
     
     # TTS configuration
     @tts_engine = 'kokoro'  # Options: 'kokoro', 'say'
-    @kokoro_voice = 'af_sarah'  # Professional female voice for business calls
+    @kokoro_voice = 'af_aoede'  # User requested Aoede voice
     @tts_speed = 1.0
     
     # Kokoro server configuration
