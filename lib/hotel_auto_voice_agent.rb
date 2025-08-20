@@ -9,6 +9,10 @@ class HotelAutoVoiceAgent
     @speaking = false
     @call_active = false
     
+    # Set up fast STT engine (Kroko for ultra-low latency)
+    puts "🚀 Initializing ultra-fast STT engine..."
+    @audio_processor.set_stt_engine('kroko')
+    
     # Start Kokoro TTS server for fast speech generation
     puts "🚀 Initializing TTS engine..."
     @audio_processor.start_kokoro_server

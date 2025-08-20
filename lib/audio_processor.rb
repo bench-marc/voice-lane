@@ -30,6 +30,20 @@ class AudioProcessor
     @kokoro_server_process = nil
     @server_startup_timeout = 30  # seconds
     
+    # STT configuration
+    @stt_engine = 'whisper'  # Options: 'whisper', 'kroko', 'wasm'
+    @kroko_stt_host = '127.0.0.1'
+    @kroko_stt_port = 8769
+    @kroko_stt_process = nil
+    @kroko_stt_timeout = 10  # seconds
+    @kroko_startup_failed = false  # Track if Kroko startup failed to avoid retries
+    
+    # WASM STT configuration
+    @wasm_stt_host = '127.0.0.1'
+    @wasm_stt_port = 8770
+    @wasm_stt_process = nil
+    @wasm_startup_failed = false
+    
     # Local audio cache for instant playback of repeated phrases
     @local_audio_cache = {}
     @max_local_cache_size = 20
@@ -80,6 +94,101 @@ class AudioProcessor
   def speech_to_text(audio_file)
     return "" unless audio_file && File.exist?(audio_file)
     
+    case @stt_engine
+    when 'wasm'
+      result = speech_to_text_wasm(audio_file)
+      # If WASM failed and returned empty, try Whisper as fallback
+      if result.empty? && @wasm_startup_failed
+        puts "🔄 Falling back to Whisper STT..."
+        result = speech_to_text_whisper(audio_file)
+      end
+      result
+    when 'kroko'
+      result = speech_to_text_kroko(audio_file)
+      # If Kroko failed and returned empty, try Whisper as fallback
+      if result.empty? && @kroko_startup_failed
+        puts "🔄 Falling back to Whisper STT..."
+        result = speech_to_text_whisper(audio_file)
+      end
+      result
+    when 'whisper'
+      speech_to_text_whisper(audio_file)
+    else
+      puts "❌ Unknown STT engine: #{@stt_engine}"
+      ""
+    end
+  end
+
+  def speech_to_text_kroko(audio_file)
+    """
+    Transcribe audio using Kroko ASR server (faster, streaming-capable)
+    """
+    return "" unless audio_file && File.exist?(audio_file)
+    
+    begin
+      # Ensure Kroko server is running
+      unless kroko_stt_server_running?
+        # Check if we already know Kroko startup failed
+        if @kroko_startup_failed
+          puts "⚠️ Kroko STT server unavailable (startup previously failed), skipping..."
+          return ""
+        end
+        
+        puts "⚠️ Kroko STT server not running, starting..."
+        unless start_kroko_stt_server
+          @kroko_startup_failed = true
+          puts "⚠️ Kroko STT server startup failed, will use Whisper fallback for subsequent requests"
+          return ""
+        end
+      end
+      
+      uri = URI("http://#{@kroko_stt_host}:#{@kroko_stt_port}/transcribe")
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = @kroko_stt_timeout
+      
+      request = Net::HTTP::Post.new(uri)
+      request['Content-Type'] = 'application/json'
+      request.body = {
+        audio_file: audio_file
+      }.to_json
+      
+      response = http.request(request)
+      
+      if response.code == '200'
+        result = JSON.parse(response.body)
+        
+        if result['status'] == 'success'
+          transcript = result['transcript'].strip
+          processing_time = result['processing_time']
+          
+          puts "🎤 Kroko transcription: '#{transcript}' (#{processing_time.round(3)}s)" if ENV['DEBUG']
+          
+          # Post-process the text for better quality
+          return clean_transcription(transcript)
+        else
+          puts "❌ Kroko STT error: #{result['message']}"
+          return ""
+        end
+      else
+        puts "❌ Kroko STT HTTP error: #{response.code}"
+        return ""
+      end
+      
+    rescue Net::TimeoutError
+      puts "❌ Kroko STT timeout"
+      return ""
+    rescue => e
+      puts "❌ Kroko STT error: #{e.message}"
+      return ""
+    end
+  end
+
+  def speech_to_text_whisper(audio_file)
+    """
+    Transcribe audio using Whisper CLI (original method)
+    """
+    return "" unless audio_file && File.exist?(audio_file)
+    
     # Optimized Whisper command for faster processing
     cmd = [
       File.expand_path('~/.local/bin/whisper'),
@@ -119,6 +228,72 @@ class AudioProcessor
   rescue => e
     puts "Speech-to-text error: #{e.message}"
     ""
+  end
+
+  def speech_to_text_wasm(audio_file)
+    """
+    Transcribe audio using WASM STT server (ultra-fast, local processing)
+    """
+    return "" unless audio_file && File.exist?(audio_file)
+    
+    begin
+      # Ensure WASM server is running
+      unless wasm_stt_server_running?
+        # Check if we already know WASM startup failed
+        if @wasm_startup_failed
+          puts "⚠️ WASM STT server startup failed, using fallback"
+          return ""
+        end
+        
+        puts "🔄 Starting WASM STT server..."
+        unless start_wasm_stt_server
+          @wasm_startup_failed = true
+          puts "❌ WASM STT server failed to start, marking as failed"
+          return ""
+        end
+      end
+      
+      # Make HTTP request to WASM STT service
+      uri = URI("http://#{@wasm_stt_host}:#{@wasm_stt_port}/transcribe")
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = @kroko_stt_timeout
+      
+      request = Net::HTTP::Post.new(uri)
+      request['Content-Type'] = 'application/json'
+      request.body = { audio_file: audio_file }.to_json
+      
+      puts "🎤 Requesting WASM transcription for: #{File.basename(audio_file)}" if ENV['DEBUG']
+      
+      response = http.request(request)
+      
+      if response.code == '200'
+        result = JSON.parse(response.body)
+        if result['status'] == 'success'
+          transcript = result['transcript'].strip
+          processing_time = result['processing_time'] || 0
+          
+          puts "🎤 WASM transcription (#{processing_time.round(3)}s): '#{transcript}'" if ENV['DEBUG']
+          return clean_transcription(transcript)
+        else
+          puts "❌ WASM STT error: #{result['message']}"
+          return ""
+        end
+      else
+        puts "❌ WASM STT HTTP error: #{response.code} #{response.message}"
+        return ""
+      end
+      
+    rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH => e
+      puts "❌ WASM STT server not reachable: #{e.message}"
+      @wasm_startup_failed = true
+      return ""
+    rescue Net::ReadTimeout => e
+      puts "❌ WASM STT timeout: #{e.message}"
+      return ""
+    rescue => e
+      puts "❌ WASM STT error: #{e.message}"
+      return ""
+    end
   end
 
   def text_to_speech(text)
@@ -515,6 +690,24 @@ class AudioProcessor
     puts "🎵 Streaming config: immediate_first=#{immediate_first}, buffer_size=#{buffer_size}, trim_silence=#{trim_silence}"
   end
 
+  def set_stt_engine(engine)
+    """
+    Switch STT engine between 'whisper', 'kroko', and 'wasm'
+    """
+    if ['whisper', 'kroko', 'wasm'].include?(engine)
+      @stt_engine = engine
+      # Reset failure flags when switching engines to allow retry
+      if engine == 'kroko'
+        @kroko_startup_failed = false
+      elsif engine == 'wasm'
+        @wasm_startup_failed = false
+      end
+      puts "🎤 STT engine set to: #{engine}"
+    else
+      puts "❌ Invalid STT engine: #{engine}. Use 'whisper', 'kroko', or 'wasm'"
+    end
+  end
+
   def kokoro_server_running?
     """
     Check if Kokoro server is running and healthy
@@ -615,6 +808,221 @@ class AudioProcessor
     stop_kokoro_server
     sleep(1)
     start_kokoro_server
+  end
+
+  def kroko_stt_server_running?
+    """
+    Check if Kroko STT server is running and healthy
+    """
+    begin
+      uri = URI("http://#{@kroko_stt_host}:#{@kroko_stt_port}/health")
+      response = Net::HTTP.get_response(uri)
+      
+      if response.code == '200'
+        health = JSON.parse(response.body)
+        return health['model_loaded'] == true
+      end
+    rescue
+      return false
+    end
+    
+    false
+  end
+
+  def start_kroko_stt_server
+    """
+    Start the Kroko STT server in background
+    """
+    return true if kroko_stt_server_running?
+    
+    puts "🚀 Starting Kroko STT server..."
+    
+    # Path to server script and Python
+    server_script = File.join(__dir__, 'kroko_stt_service.py')
+    venv_python = File.expand_path('../venv_kroko/bin/python', __dir__)
+    python_cmd = File.exist?(venv_python) ? venv_python : 'python3'
+    
+    begin
+      # Start server in background
+      @kroko_stt_process = spawn(
+        "#{python_cmd} #{server_script} --host #{@kroko_stt_host} --port #{@kroko_stt_port}",
+        out: '/dev/null',
+        err: '/dev/null',
+        pgroup: true
+      )
+      
+      # Detach process so it can run independently
+      Process.detach(@kroko_stt_process)
+      
+      # Wait for server to be ready
+      puts "⏳ Waiting for Kroko STT server to start..."
+      start_time = Time.now
+      
+      while (Time.now - start_time) < @server_startup_timeout
+        if kroko_stt_server_running?
+          puts "✅ Kroko STT server started successfully"
+          return true
+        end
+        
+        sleep(0.5)
+      end
+      
+      puts "❌ Kroko STT server failed to start within #{@server_startup_timeout} seconds"
+      stop_kroko_stt_server
+      return false
+      
+    rescue => e
+      puts "❌ Failed to start Kroko STT server: #{e.message}"
+      return false
+    end
+  end
+
+  def stop_kroko_stt_server
+    """
+    Stop the Kroko STT server
+    """
+    if @kroko_stt_process
+      begin
+        # Kill the process group to ensure all child processes are terminated
+        Process.kill('TERM', -@kroko_stt_process)
+        sleep(1)
+        
+        # Force kill if still running
+        begin
+          Process.kill('KILL', -@kroko_stt_process)
+        rescue Errno::ESRCH
+          # Process already dead, which is fine
+        end
+        
+        @kroko_stt_process = nil
+        puts "🛑 Kroko STT server stopped"
+      rescue => e
+        puts "⚠️ Error stopping Kroko STT server: #{e.message}"
+      end
+    end
+  end
+
+  def restart_kroko_stt_server
+    """
+    Restart the Kroko STT server
+    """
+    puts "🔄 Restarting Kroko STT server..."
+    stop_kroko_stt_server
+    sleep(1)
+    start_kroko_stt_server
+  end
+
+  def wasm_stt_server_running?
+    """
+    Check if WASM STT server is running and responsive
+    """
+    begin
+      uri = URI("http://#{@wasm_stt_host}:#{@wasm_stt_port}/health")
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = 2
+      response = http.get(uri.path)
+      
+      if response.code == '200'
+        result = JSON.parse(response.body)
+        return result['status'] == 'healthy'
+      end
+      return false
+    rescue
+      return false
+    end
+  end
+
+  def start_wasm_stt_server
+    """
+    Start the WASM STT server in background
+    """
+    return true if wasm_stt_server_running?
+    
+    begin
+      puts "🚀 Starting WASM STT server on #{@wasm_stt_host}:#{@wasm_stt_port}..."
+      
+      # Path to WASM STT service
+      service_path = File.expand_path('../lib/wasm_stt_service.py', __dir__)
+      
+      unless File.exist?(service_path)
+        puts "❌ WASM STT service not found at: #{service_path}"
+        return false
+      end
+      
+      # Start the server process
+      @wasm_stt_process = spawn(
+        'python3', service_path,
+        '--host', @wasm_stt_host,
+        '--port', @wasm_stt_port.to_s,
+        pgroup: true,  # Create new process group
+        out: '/dev/null',
+        err: '/dev/null'
+      )
+      
+      # Wait for server to be ready
+      ready = false
+      (@server_startup_timeout * 2).times do |i|
+        sleep(0.5)
+        if wasm_stt_server_running?
+          ready = true
+          break
+        end
+        print "." if i % 4 == 0  # Progress indicator every 2 seconds
+      end
+      
+      if ready
+        puts "✅ WASM STT server started successfully"
+        @wasm_startup_failed = false
+        return true
+      else
+        puts "❌ WASM STT server failed to start within #{@server_startup_timeout} seconds"
+        stop_wasm_stt_server
+        @wasm_startup_failed = true
+        return false
+      end
+      
+    rescue => e
+      puts "❌ Error starting WASM STT server: #{e.message}"
+      @wasm_startup_failed = true
+      return false
+    end
+  end
+
+  def stop_wasm_stt_server
+    """
+    Stop the WASM STT server
+    """
+    if @wasm_stt_process
+      begin
+        puts "🛑 Stopping WASM STT server..."
+        
+        # Kill the process group to ensure all child processes are terminated
+        Process.kill('TERM', -@wasm_stt_process)
+        sleep(1)
+        
+        # Force kill if still running
+        begin
+          Process.kill('KILL', -@wasm_stt_process)
+        rescue Errno::ESRCH
+          # Process already dead, which is fine
+        end
+        
+        @wasm_stt_process = nil
+        puts "🛑 WASM STT server stopped"
+      rescue => e
+        puts "⚠️ Error stopping WASM STT server: #{e.message}"
+      end
+    end
+  end
+
+  def restart_wasm_stt_server
+    """
+    Restart the WASM STT server
+    """
+    puts "🔄 Restarting WASM STT server..."
+    stop_wasm_stt_server
+    sleep(1)
+    start_wasm_stt_server
   end
 
   def add_to_local_cache(cache_key, audio_file)
