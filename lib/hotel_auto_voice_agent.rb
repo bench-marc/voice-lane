@@ -1,6 +1,7 @@
 require_relative 'audio_processor'
 require_relative 'hotel_booking_agent'
 require_relative 'continuous_audio_monitor'
+require_relative 'kroko_streaming_audio_monitor'
 
 class HotelAutoVoiceAgent
   def initialize
@@ -9,18 +10,29 @@ class HotelAutoVoiceAgent
     @speaking = false
     @call_active = false
     
-    # Set up fast STT engine (Kroko for ultra-low latency)
-    puts "🚀 Initializing ultra-fast STT engine..."
-    @audio_processor.set_stt_engine('kroko')
+    # Set up STT engine (using Whisper for real speech recognition)
+    puts "🚀 Initializing STT engine..."
+    @audio_processor.set_stt_engine('whisper')
     
     # Start Kokoro TTS server for fast speech generation
     puts "🚀 Initializing TTS engine..."
     @audio_processor.start_kokoro_server
     
-    # Create callbacks for continuous audio monitor
+    # Create callbacks for Kroko streaming audio monitor
     speech_callback = method(:handle_hotel_speech)
     speaking_callback = method(:agent_speaking?)
-    @audio_monitor = ContinuousAudioMonitor.new(speech_callback, speaking_callback)
+    
+    # Try to use Kroko streaming monitor, fallback to traditional monitor
+    begin
+      puts "🚀 Initializing Kroko streaming audio monitor..."
+      @audio_monitor = KrokoStreamingAudioMonitor.new(speech_callback, speaking_callback)
+      @using_kroko_streaming = true
+      puts "✅ Using Kroko streaming for ultra-fast silence detection"
+    rescue => e
+      puts "⚠️ Kroko streaming unavailable, falling back to WebRTC VAD: #{e.message}"
+      @audio_monitor = ContinuousAudioMonitor.new(speech_callback, speaking_callback)
+      @using_kroko_streaming = false
+    end
     
     # Set up signal handlers for graceful shutdown
     setup_signal_handlers
@@ -37,6 +49,12 @@ class HotelAutoVoiceAgent
     puts "📅 Check-in: #{checkin_date}" if checkin_date
     puts "📅 Check-out: #{checkout_date}" if checkout_date
     puts "="*60
+    if @using_kroko_streaming
+      puts "🚀 Using Kroko streaming STT with native silence detection"
+      puts "⚡ Ultra-low latency: <100ms first word, 20x real-time processing"
+    else
+      puts "🎤 Using WebRTC VAD + Kroko STT fallback mode"
+    end
     puts "🎤 Agent will listen first for hotel greeting, then respond"
     puts "⏹️  Say 'end call' or press Ctrl+C to stop"
     puts "="*60 + "\n"
