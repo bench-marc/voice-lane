@@ -31,6 +31,7 @@ class TTSRequest(BaseModel):
     text: str
     voice: str = "af_aoede"
     speed: float = 1.0
+    trim_silence: bool = True
 
 
 class TTSResponse(BaseModel):
@@ -96,7 +97,7 @@ class KokoroTTSServer:
             if not self.model_loaded:
                 raise HTTPException(status_code=503, detail="Model not loaded yet")
                 
-            return await self._generate_speech(request.text, request.voice, request.speed)
+            return await self._generate_speech(request.text, request.voice, request.speed, request.trim_silence)
         
         @self.app.get("/voices")
         async def list_voices():
@@ -155,12 +156,69 @@ class KokoroTTSServer:
             print(f"❌ Failed to load Kokoro model: {e}")
             self.model_loaded = False
     
-    def _get_cache_key(self, text: str, voice: str, speed: float) -> str:
+    def _get_cache_key(self, text: str, voice: str, speed: float, trim_silence: bool = True) -> str:
         """Generate cache key for TTS request"""
-        content = f"{text}|{voice}|{speed}"
+        content = f"{text}|{voice}|{speed}|{trim_silence}"
         return hashlib.md5(content.encode()).hexdigest()
     
-    async def _generate_speech(self, text: str, voice: str, speed: float) -> TTSResponse:
+    def _trim_silence(self, audio_data: np.ndarray, threshold: float = 0.01, sample_rate: int = 24000) -> np.ndarray:
+        """
+        Remove silence from beginning and end of audio data
+        
+        Args:
+            audio_data: Audio samples as numpy array
+            threshold: Amplitude threshold for silence detection (0.01 = 1% of max amplitude)
+            sample_rate: Sample rate of audio (used for minimum duration calculations)
+        
+        Returns:
+            Trimmed audio data
+        """
+        if len(audio_data) == 0:
+            return audio_data
+        
+        # Convert to absolute values for amplitude detection
+        abs_audio = np.abs(audio_data)
+        max_amplitude = np.max(abs_audio)
+        
+        # Handle edge case of completely silent audio
+        if max_amplitude == 0:
+            return audio_data
+        
+        # Calculate threshold based on maximum amplitude
+        silence_threshold = max_amplitude * threshold
+        
+        # Find non-silent samples
+        non_silent_mask = abs_audio > silence_threshold
+        
+        # If no non-silent samples found, return original (edge case)
+        if not np.any(non_silent_mask):
+            return audio_data
+        
+        # Find first and last non-silent sample indices
+        non_silent_indices = np.where(non_silent_mask)[0]
+        first_sound = non_silent_indices[0]
+        last_sound = non_silent_indices[-1]
+        
+        # Add small padding to avoid cutting speech too aggressively
+        # Padding: 50ms before and after actual speech
+        padding_samples = int(0.05 * sample_rate)  # 50ms padding
+        
+        start_index = max(0, first_sound - padding_samples)
+        end_index = min(len(audio_data), last_sound + padding_samples + 1)
+        
+        trimmed_audio = audio_data[start_index:end_index]
+        
+        # Log trimming statistics if debugging
+        original_duration = len(audio_data) / sample_rate
+        trimmed_duration = len(trimmed_audio) / sample_rate
+        time_saved = original_duration - trimmed_duration
+        
+        if time_saved > 0.1:  # Only log if significant time saved (>100ms)
+            print(f"🔇 Trimmed {time_saved:.2f}s silence ({original_duration:.2f}s → {trimmed_duration:.2f}s)")
+        
+        return trimmed_audio
+    
+    async def _generate_speech(self, text: str, voice: str, speed: float, trim_silence: bool = True) -> TTSResponse:
         """Generate speech with caching"""
         try:
             # Clean the text
@@ -172,7 +230,7 @@ class KokoroTTSServer:
                 )
             
             # Check cache first
-            cache_key = self._get_cache_key(text, voice, speed)
+            cache_key = self._get_cache_key(text, voice, speed, trim_silence)
             if cache_key in self.audio_cache:
                 cached_file = self.audio_cache[cache_key]
                 if os.path.exists(cached_file):
@@ -218,6 +276,10 @@ class KokoroTTSServer:
                 if new_length > 0:
                     indices = np.linspace(0, original_length - 1, new_length)
                     full_audio = np.interp(indices, np.arange(original_length), full_audio)
+            
+            # Apply silence trimming if requested
+            if trim_silence:
+                full_audio = self._trim_silence(full_audio, threshold=0.01, sample_rate=24000)
             
             # Create output file
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
