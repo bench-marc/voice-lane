@@ -54,16 +54,16 @@ class StreamingSTTController
       ]
       cmd_parts << @language if @language
 
-      # Start service in background
+      # Start service in background with process group
       @service_process = spawn(
         cmd_parts.join(' '),
         out: File.expand_path('../tmp/streaming_stt.log', __dir__),
         err: File.expand_path('../tmp/streaming_stt_error.log', __dir__),
-        pgroup: true
+        pgroup: true  # Create new process group to avoid parent signals
       )
 
-      # Detach process
-      Process.detach(@service_process)
+      # Don't detach so we can manage the process properly
+      # Process.detach(@service_process)
 
       # Wait for service to start
       puts "⏳ Waiting for service to start..."
@@ -342,7 +342,8 @@ class StreamingSTTController
       end
 
     rescue => e
-      puts "❌ Error stopping streaming: #{e.message}"
+      # Silence errors in trap context to avoid warnings
+      puts "❌ Error stopping streaming: #{e.message}" unless Signal.trap('INT') == 'DEFAULT'
     end
 
     @active = false
@@ -394,13 +395,21 @@ class StreamingSTTController
             end
           end
 
-          # Check service health periodically
+          # Check service health periodically, but only stop if consistently unhealthy
           if results.empty?
             status = get_service_status
             unless status["status"] == "running"
-              puts "⚠️ Service not healthy: #{status['status']}"
-              @active = false
-              break
+              puts "⚠️ Service not healthy: #{status['status']} - attempting restart..." if ENV['DEBUG']
+              
+              # Try to restart the service instead of just stopping
+              if restart_service
+                puts "✅ Service restarted successfully" if ENV['DEBUG']
+                next  # Continue monitoring
+              else
+                puts "❌ Failed to restart service - stopping monitoring"
+                @active = false
+                break
+              end
             end
           end
 
