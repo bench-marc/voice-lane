@@ -293,6 +293,126 @@ class AudioProcessor
     end
   end
 
+  def generate_kokoro_audio_streaming(text, voice: nil, speed: nil)
+    """
+    Generate audio using Kokoro streaming endpoint - yields chunks as they're generated
+    """
+    voice ||= @kokoro_voice
+    speed ||= @tts_speed
+    
+    # Ensure Kokoro server is running
+    unless kokoro_server_running?
+      unless start_kokoro_server
+        puts "❌ Failed to start Kokoro server for streaming"
+        return
+      end
+    end
+    
+    begin
+      require 'net/http'
+      require 'json'
+      require 'base64'
+      require 'tempfile'
+      
+      # Make streaming HTTP request to Kokoro server
+      uri = URI("http://#{@kokoro_server_host}:#{@kokoro_server_port}/tts_stream")
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = 30  # Longer timeout for streaming
+      
+      request = Net::HTTP::Post.new(uri)
+      request['Content-Type'] = 'application/json'
+      request['Accept'] = 'text/event-stream'
+      request.body = {
+        text: text,
+        voice: voice,
+        speed: speed,
+        trim_silence: true
+      }.to_json
+      
+      puts "🎵 Starting Kokoro streaming for: '#{text.slice(0, 50)}...'" if ENV['DEBUG']
+      
+      http.request(request) do |response|
+        if response.code == '200'
+          chunk_count = 0
+          audio_files = []
+          
+          # Process streaming response with proper SSE handling
+          buffer = ""
+          
+          response.read_body do |chunk|
+            buffer += chunk
+            
+            # Process complete events (ending with \n\n)
+            while buffer.include?("\n\n")
+              event_end = buffer.index("\n\n")
+              event_data = buffer[0...event_end]
+              buffer = buffer[event_end + 2..-1]
+              
+              next unless event_data.start_with?("data: ")
+              
+              json_data = event_data[6..-1]  # Remove "data: " prefix
+              next if json_data.strip.empty?
+              
+              begin
+                data = JSON.parse(json_data)
+                
+                case data['status']
+                when 'streaming'
+                  puts "🎵 Streaming started: #{data['voice']}, #{data['sample_rate']}Hz" if ENV['DEBUG']
+                  
+                when 'chunk'
+                  chunk_count += 1
+                  
+                  # Decode base64 audio data
+                  audio_b64 = data['audio_data']
+                  audio_bytes = Base64.decode64(audio_b64)
+                  
+                  # Save chunk to temporary file
+                  temp_file = Tempfile.new(['kokoro_chunk', '.wav'])
+                  temp_file.binmode
+                  temp_file.write(audio_bytes)
+                  temp_file.close
+                  
+                  audio_files << temp_file.path
+                  
+                  puts "🎵 Chunk #{chunk_count}: #{data['chunk_duration'].round(3)}s (total: #{data['total_duration'].round(2)}s)" if ENV['DEBUG']
+                  
+                  # Play chunk immediately for true streaming
+                  if block_given?
+                    yield temp_file.path, data['chunk_duration']
+                  else
+                    # Play immediately if no block given
+                    play_audio_file(temp_file.path)
+                  end
+                  
+                when 'complete'
+                  puts "🎵 Streaming complete: #{data['total_chunks']} chunks, #{data['total_duration'].round(2)}s (#{data['realtime_factor'].round(1)}x realtime)" if ENV['DEBUG']
+                  
+                when 'error'
+                  puts "❌ Streaming error: #{data['message']}"
+                  return
+                end
+                
+              rescue JSON::ParserError => e
+                puts "⚠️ Failed to parse streaming data: #{e.message}" if ENV['DEBUG']
+                puts "⚠️ Problematic JSON: #{json_data[0..100]}..." if ENV['DEBUG']
+              end
+            end
+          end
+          
+          return audio_files
+        else
+          puts "❌ Kokoro streaming failed: HTTP #{response.code}"
+          return
+        end
+      end
+      
+    rescue => e
+      puts "❌ Kokoro streaming error: #{e.message}"
+      return
+    end
+  end
+
   def text_to_speech_kokoro_direct(text, voice, speed)
     """
     Fallback direct method using original Kokoro script
@@ -946,12 +1066,40 @@ class AudioProcessor
         
         audio_file_path = nil
         if @tts_engine == 'kokoro'
-          audio_file_path = generate_kokoro_audio_file(sentence_text)
+          # Use streaming generation for faster response
+          streaming_success = false
+          
+          begin
+            generate_kokoro_audio_streaming(sentence_text) do |chunk_file, chunk_duration|
+              # Queue each chunk for immediate playback using correct format
+              @queue_mutex.synchronize do
+                @audio_queue.push({
+                  type: :audio_file,
+                  path: chunk_file,
+                  text: "#{sentence_text} (chunk)",
+                  duration: chunk_duration,
+                  timestamp: Time.now
+                })
+              end
+              puts "🎵 [DEBUG] Streamed chunk queued: #{File.basename(chunk_file)} (#{chunk_duration.round(2)}s)" if ENV['DEBUG']
+              streaming_success = true
+            end
+          rescue => e
+            puts "⚠️ Streaming failed, falling back to regular generation: #{e.message}" if ENV['DEBUG']
+            streaming_success = false
+          end
+          
+          # Fallback to regular generation if streaming failed completely
+          unless streaming_success
+            puts "🎵 [DEBUG] Using fallback Kokoro generation" if ENV['DEBUG']
+            audio_file_path = generate_kokoro_audio_file(sentence_text)
+          end
         else
           # For 'say' engine, generate temp file
           audio_file_path = generate_say_audio_file(sentence_text)
         end
         
+        # Handle traditional file-based generation (non-streaming)
         if audio_file_path && File.exist?(audio_file_path)
           # Debug timing: Audio generation completed
           if ENV['DEBUG'] && generation_start
@@ -973,6 +1121,13 @@ class AudioProcessor
             puts "🎵 Audio file queued: #{File.basename(audio_file_path)}" if ENV['DEBUG']
           end
           puts "🎵 Queue size after audio file: #{@audio_queue.size}" if ENV['DEBUG']
+        elsif @tts_engine == 'kokoro'
+          # Streaming case - chunks were already queued in the callback
+          if ENV['DEBUG'] && generation_start
+            generation_time = Time.now - generation_start
+            puts "🎤 [DEBUG] Streaming audio generation completed in #{(generation_time * 1000).round(0)}ms for: '#{sentence_text.slice(0, 30)}...'"
+          end
+          puts "🎵 Queue size after streaming: #{@audio_queue.size}" if ENV['DEBUG']
         else
           if ENV['DEBUG'] && generation_start
             generation_time = Time.now - generation_start

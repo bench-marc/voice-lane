@@ -5,6 +5,7 @@ Persistent server that keeps the Kokoro model loaded in memory for fast TTS gene
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ from typing import Optional
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 try:
@@ -98,6 +100,14 @@ class KokoroTTSServer:
                 raise HTTPException(status_code=503, detail="Model not loaded yet")
                 
             return await self._generate_speech(request.text, request.voice, request.speed, request.trim_silence)
+        
+        @self.app.post("/tts_stream")
+        async def generate_tts_stream(request: TTSRequest):
+            """Generate TTS audio with streaming chunks"""
+            if not self.model_loaded:
+                raise HTTPException(status_code=503, detail="Model not loaded yet")
+                
+            return await self._generate_speech_streaming(request.text, request.voice, request.speed, request.trim_silence)
         
         @self.app.get("/voices")
         async def list_voices():
@@ -319,6 +329,129 @@ class KokoroTTSServer:
             return TTSResponse(
                 status="error", 
                 message=f"Speech generation failed: {e}"
+            )
+    
+    async def _generate_speech_streaming(self, text: str, voice: str, speed: float, trim_silence: bool = True):
+        """Generate speech with streaming chunks - returns chunks as they're generated"""
+        try:
+            # Clean the text
+            text = text.strip()
+            if not text:
+                return StreamingResponse(
+                    iter([json.dumps({"status": "error", "message": "Empty text provided"}).encode()]),
+                    media_type="application/json"
+                )
+            
+            async def audio_chunk_generator():
+                """Generator that yields audio chunks as they're produced by Kokoro"""
+                try:
+                    # Send initial metadata
+                    metadata = {
+                        "status": "streaming",
+                        "voice": voice,
+                        "text": text,
+                        "sample_rate": 24000
+                    }
+                    yield f"data: {json.dumps(metadata)}\n\n"
+                    
+                    # Generate audio using Kokoro pipeline
+                    start_time = time.time()
+                    generator = self.pipeline(text, voice=voice)
+                    
+                    chunk_count = 0
+                    total_audio_samples = 0
+                    
+                    # Process each chunk as it's generated
+                    for i, (graphemes, phonemes, audio) in enumerate(generator):
+                        if audio is not None and len(audio) > 0:
+                            chunk_count += 1
+                            
+                            # Apply speed adjustment if needed
+                            if speed != 1.0:
+                                original_length = len(audio)
+                                new_length = int(original_length / speed)
+                                if new_length > 0:
+                                    indices = np.linspace(0, original_length - 1, new_length)
+                                    audio = np.interp(indices, np.arange(original_length), audio)
+                            
+                            # Apply silence trimming if requested (per chunk) 
+                            if trim_silence and len(audio) > 0:
+                                try:
+                                    audio = self._trim_silence(audio, threshold=0.02, sample_rate=24000)
+                                except Exception as trim_e:
+                                    # If trimming fails, use original audio
+                                    print(f"Warning: Silence trimming failed: {trim_e}")
+                                    pass
+                            
+                            # Convert audio to base64 for transmission
+                            # Save to temporary buffer and encode
+                            temp_buffer = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                            sf.write(temp_buffer.name, audio, 24000)
+                            
+                            with open(temp_buffer.name, 'rb') as f:
+                                audio_bytes = f.read()
+                                audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                            
+                            # Clean up temp file
+                            os.unlink(temp_buffer.name)
+                            
+                            total_audio_samples += len(audio)
+                            chunk_duration = len(audio) / 24000
+                            total_duration = total_audio_samples / 24000
+                            
+                            # Send audio chunk
+                            chunk_data = {
+                                "status": "chunk",
+                                "chunk_id": chunk_count,
+                                "audio_data": audio_b64,
+                                "chunk_duration": chunk_duration,
+                                "total_duration": total_duration,
+                                "phonemes": phonemes if phonemes else "",
+                                "graphemes": graphemes if graphemes else ""
+                            }
+                            
+                            yield f"data: {json.dumps(chunk_data)}\n\n"
+                            
+                            # Allow other tasks to run
+                            await asyncio.sleep(0.001)
+                    
+                    generation_time = time.time() - start_time
+                    final_duration = total_audio_samples / 24000
+                    
+                    # Send completion message
+                    completion_data = {
+                        "status": "complete",
+                        "total_chunks": chunk_count,
+                        "total_duration": final_duration,
+                        "generation_time": generation_time,
+                        "realtime_factor": final_duration / generation_time if generation_time > 0 else 0
+                    }
+                    
+                    yield f"data: {json.dumps(completion_data)}\n\n"
+                    
+                    print(f"🎤 Streamed {final_duration:.1f}s audio in {generation_time:.2f}s ({chunk_count} chunks, {final_duration/generation_time:.1f}x realtime)")
+                    
+                except Exception as e:
+                    error_data = {
+                        "status": "error",
+                        "message": f"Streaming generation failed: {e}"
+                    }
+                    yield f"data: {json.dumps(error_data)}\n\n"
+            
+            return StreamingResponse(
+                audio_chunk_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*"
+                }
+            )
+            
+        except Exception as e:
+            return StreamingResponse(
+                iter([f"data: {json.dumps({'status': 'error', 'message': f'Streaming setup failed: {e}'})}\n\n".encode()]),
+                media_type="text/event-stream"
             )
 
 

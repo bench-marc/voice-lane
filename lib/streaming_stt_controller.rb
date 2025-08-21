@@ -343,7 +343,7 @@ class StreamingSTTController
 
     rescue => e
       # Silence errors in trap context to avoid warnings
-      puts "❌ Error stopping streaming: #{e.message}" unless Signal.trap('INT') == 'DEFAULT'
+      puts "❌ Error stopping streaming: #{e.message}"
     end
 
     @active = false
