@@ -39,13 +39,16 @@ except ImportError:
     vad_available = False
 
 try:
-    # Import whisper processing from existing infrastructure
-    import subprocess
+    # Import faster-whisper for high-performance transcription
+    from faster_whisper import WhisperModel
     whisper_available = True
-    logger.info("✅ Whisper available via subprocess")
+    logger.info("✅ faster-whisper library available")
 except ImportError:
-    logger.error("❌ Whisper not available")
+    logger.error("❌ faster-whisper library not available")
     whisper_available = False
+    
+# Also import subprocess as fallback
+import subprocess
 
 
 class StreamingAudioService:
@@ -61,7 +64,26 @@ class StreamingAudioService:
         
         self.model_name = model_name
         self.language = language
-        self.whisper_path = whisper_path or os.path.expanduser('~/.local/bin/whisper')
+        self.whisper_path = whisper_path or os.path.expanduser('~/.local/bin/whisper')  # Fallback only
+        
+        # Initialize faster-whisper model (keep in memory for speed)
+        self.whisper_model = None
+        if whisper_available:
+            try:
+                logger.info(f"🚀 Loading faster-whisper model '{model_name}'...")
+                # Use optimal settings for speed
+                self.whisper_model = WhisperModel(
+                    model_name, 
+                    device="cpu",  # Can change to "cuda" if GPU available
+                    compute_type="int8",  # Faster on CPU
+                    cpu_threads=4,
+                    num_workers=1  # Single worker for lower latency
+                )
+                logger.info("✅ faster-whisper model loaded successfully")
+            except Exception as e:
+                logger.error(f"❌ Failed to load faster-whisper model: {e}")
+                logger.info("⚠️ Will fallback to CLI whisper if needed")
+                self.whisper_model = None
         
         # Audio configuration optimized for low latency
         self.sample_rate = 16000  # Standard Whisper rate
@@ -70,7 +92,7 @@ class StreamingAudioService:
         self.chunk_size = int(self.sample_rate * self.chunk_duration_ms / 1000)
         
         # Silence detection configuration - tuned for fast response  
-        self.silence_threshold_ms = 800   # 0.8 seconds silence to trigger transcription
+        self.silence_threshold_ms = 400   # 0.4 seconds silence to trigger transcription
         self.min_audio_duration_ms = 200  # Minimum audio to process (200ms)
         self.max_audio_duration_ms = 10000 # Maximum audio before forced processing
         
@@ -385,8 +407,49 @@ class StreamingAudioService:
             logger.error(f"❌ Audio processing error: {e}")
     
     def _transcribe_with_whisper(self, audio_file_path):
-        """Transcribe audio file using existing Whisper setup"""
+        """Transcribe audio file using faster-whisper library for optimal speed"""
         try:
+            if self.whisper_model:
+                # Use faster-whisper library (much faster!)
+                logger.debug(f"🚀 Transcribing with faster-whisper: {os.path.basename(audio_file_path)}")
+                
+                # Transcribe with optimal settings for speed
+                segments, info = self.whisper_model.transcribe(
+                    audio_file_path,
+                    language=self.language,  # None for auto-detection
+                    beam_size=1,            # Fastest processing
+                    best_of=1,              # Fastest processing
+                    temperature=0.0,        # Most deterministic
+                    vad_filter=True,        # Use VAD to filter out non-speech
+                    vad_parameters=dict(
+                        min_silence_duration_ms=100,  # Very responsive
+                        max_speech_duration_s=30      # Reasonable limit
+                    )
+                )
+                
+                # Extract text from segments
+                transcript_parts = []
+                for segment in segments:
+                    transcript_parts.append(segment.text.strip())
+                
+                transcription = ' '.join(transcript_parts).strip()
+                logger.debug(f"✅ faster-whisper result: '{transcription}'")
+                return transcription
+                
+            else:
+                # Fallback to CLI whisper if faster-whisper failed to load
+                return self._transcribe_with_whisper_cli(audio_file_path)
+                
+        except Exception as e:
+            logger.error(f"❌ faster-whisper error: {e}")
+            # Fallback to CLI whisper on error
+            return self._transcribe_with_whisper_cli(audio_file_path)
+    
+    def _transcribe_with_whisper_cli(self, audio_file_path):
+        """Fallback transcription using CLI whisper (slower)"""
+        try:
+            logger.debug("⚠️ Using fallback CLI whisper (slower)")
+            
             # Build Whisper command with optimizations for speed
             cmd = [
                 self.whisper_path,
@@ -426,12 +489,12 @@ class StreamingAudioService:
                     
                     return whisper_result.get('text', '').strip()
             else:
-                logger.error(f"Whisper error: {result.stderr}")
+                logger.error(f"CLI Whisper error: {result.stderr}")
                 
         except subprocess.TimeoutExpired:
-            logger.warning("⚠️ Whisper timeout - audio may be too long")
+            logger.warning("⚠️ CLI Whisper timeout - audio may be too long")
         except Exception as e:
-            logger.error(f"❌ Whisper transcription error: {e}")
+            logger.error(f"❌ CLI Whisper transcription error: {e}")
             
         return ""
     
@@ -523,6 +586,8 @@ class StreamingAudioService:
             "sample_rate": self.sample_rate,
             "is_streaming": self.is_streaming,
             "whisper_available": whisper_available,
+            "faster_whisper_loaded": self.whisper_model is not None,
+            "whisper_implementation": "faster-whisper" if self.whisper_model else "cli-whisper",
             "vad_available": vad_available,
             "audio_capture_available": audio_capture_available,
             "chunk_duration_ms": self.chunk_duration_ms,

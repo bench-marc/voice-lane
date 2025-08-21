@@ -762,7 +762,7 @@ class AudioProcessor
       streaming_playback_loop
     end
     
-    puts "🎵 Streaming TTS started (concatenation: #{@concatenation_enabled ? 'enabled' : 'disabled'})"
+    puts "🎵 Streaming TTS started (concatenation: #{@concatenation_enabled ? 'enabled' : 'disabled'})" if ENV['DEBUG']
   end
 
   def stop_streaming_tts
@@ -839,7 +839,7 @@ class AudioProcessor
       force_clear_audio_queue
     end
     
-    puts "🎵 Streaming TTS stopped (queue size: #{@audio_queue.size}, active threads: #{@tts_thread_mutex.synchronize { @active_tts_threads }})"
+    puts "🎵 Streaming TTS stopped (queue size: #{@audio_queue.size}, active threads: #{@tts_thread_mutex.synchronize { @active_tts_threads }})" if ENV['DEBUG']
   end
 
   def stream_text_chunk(text_chunk, is_final = false)
@@ -861,6 +861,22 @@ class AudioProcessor
     if is_final && !@streaming_buffer.empty?
       process_final_text(@streaming_buffer)
       @streaming_buffer = ""
+    end
+  end
+
+  def get_audio_duration(audio_file_path)
+    """
+    Get audio file duration in seconds using ffprobe
+    """
+    return "unknown" unless File.exist?(audio_file_path)
+    
+    begin
+      # Use ffprobe to get duration
+      result = `ffprobe -i "#{audio_file_path}" -show_entries format=duration -v quiet -of csv="p=0" 2>/dev/null`.strip
+      duration = result.to_f
+      return duration > 0 ? duration.round(1) : "unknown"
+    rescue
+      return "unknown"
     end
   end
 
@@ -925,6 +941,9 @@ class AudioProcessor
       begin
         puts "🎤 Starting TTS generation for: '#{sentence_text.slice(0, 50)}...'" if ENV['DEBUG']
         
+        # Debug timing: Audio generation start
+        generation_start = Time.now if ENV['DEBUG']
+        
         audio_file_path = nil
         if @tts_engine == 'kokoro'
           audio_file_path = generate_kokoro_audio_file(sentence_text)
@@ -934,14 +953,33 @@ class AudioProcessor
         end
         
         if audio_file_path && File.exist?(audio_file_path)
+          # Debug timing: Audio generation completed
+          if ENV['DEBUG'] && generation_start
+            generation_time = Time.now - generation_start
+            # Get audio file duration for context
+            audio_duration = get_audio_duration(audio_file_path) rescue "unknown"
+            puts "🎤 [DEBUG] Audio generation completed in #{(generation_time * 1000).round(0)}ms for #{audio_duration}s audio"
+          end
+          
           # Queue the audio file for playback
+          queue_start = Time.now if ENV['DEBUG']
           queue_item = { type: :audio_file, path: audio_file_path, text: sentence_text }
           @audio_queue.push(queue_item)
           
-          puts "🎵 Audio file queued: #{File.basename(audio_file_path)}" if ENV['DEBUG']
+          if ENV['DEBUG'] && queue_start
+            queue_time = Time.now - queue_start
+            puts "🎵 [DEBUG] Queued in #{(queue_time * 1000).round(0)}ms: #{File.basename(audio_file_path)}"
+          else
+            puts "🎵 Audio file queued: #{File.basename(audio_file_path)}" if ENV['DEBUG']
+          end
           puts "🎵 Queue size after audio file: #{@audio_queue.size}" if ENV['DEBUG']
         else
-          puts "❌ Failed to generate audio file for: '#{sentence_text.slice(0, 30)}...'"
+          if ENV['DEBUG'] && generation_start
+            generation_time = Time.now - generation_start
+            puts "❌ [DEBUG] Audio generation failed in #{(generation_time * 1000).round(0)}ms for: '#{sentence_text.slice(0, 30)}...'"
+          else
+            puts "❌ Failed to generate audio file for: '#{sentence_text.slice(0, 30)}...'"
+          end
         end
         
       rescue => e
@@ -973,6 +1011,9 @@ class AudioProcessor
       begin
         puts "🎤 Starting TTS generation for final text: '#{text.slice(0, 50)}...'" if ENV['DEBUG']
         
+        # Debug timing: Final audio generation start
+        generation_start = Time.now if ENV['DEBUG']
+        
         audio_file_path = nil
         if @tts_engine == 'kokoro'
           audio_file_path = generate_kokoro_audio_file(text)
@@ -981,14 +1022,33 @@ class AudioProcessor
         end
         
         if audio_file_path && File.exist?(audio_file_path)
+          # Debug timing: Final audio generation completed
+          if ENV['DEBUG'] && generation_start
+            generation_time = Time.now - generation_start
+            # Get audio file duration for context
+            audio_duration = get_audio_duration(audio_file_path) rescue "unknown"
+            puts "🎤 [DEBUG] Final audio generation completed in #{(generation_time * 1000).round(0)}ms for #{audio_duration}s audio"
+          end
+          
           # Queue the audio file for playback
+          queue_start = Time.now if ENV['DEBUG']
           final_item = { type: :audio_file, path: audio_file_path, text: text }
           @audio_queue.push(final_item)
           
-          puts "🎵 Final audio file queued: #{File.basename(audio_file_path)}" if ENV['DEBUG']
+          if ENV['DEBUG'] && queue_start
+            queue_time = Time.now - queue_start
+            puts "🎵 [DEBUG] Final audio queued in #{(queue_time * 1000).round(0)}ms: #{File.basename(audio_file_path)}"
+          else
+            puts "🎵 Final audio file queued: #{File.basename(audio_file_path)}" if ENV['DEBUG']
+          end
           puts "🎵 Queue size after final audio: #{@audio_queue.size}" if ENV['DEBUG']
         else
-          puts "❌ Failed to generate final audio file"
+          if ENV['DEBUG'] && generation_start
+            generation_time = Time.now - generation_start
+            puts "❌ [DEBUG] Final audio generation failed in #{(generation_time * 1000).round(0)}ms"
+          else
+            puts "❌ Failed to generate final audio file"
+          end
         end
         
       rescue => e
@@ -1046,7 +1106,7 @@ class AudioProcessor
     """
     Main loop for streaming audio playback - now handles audio files instead of text
     """
-    puts "🎵 Streaming playback thread started (audio file mode)"
+    puts "🎵 Streaming playback thread started (audio file mode)" if ENV['DEBUG']
     
     empty_queue_count = 0
     max_empty_attempts = 50  # Increased attempts
@@ -1059,6 +1119,9 @@ class AudioProcessor
           # Try non-blocking pop first
           audio_task = @audio_queue.pop(true)
           empty_queue_count = 0  # Reset counter when we get a task
+          
+          # Debug timing: Track when we retrieve from queue
+          queue_retrieve_time = Time.now if ENV['DEBUG']
           
           if audio_task[:type] == :audio_file
             puts "🎵 Got audio file: #{File.basename(audio_task[:path])} for '#{audio_task[:text]&.slice(0, 30)}...'" if ENV['DEBUG']
@@ -1107,7 +1170,26 @@ class AudioProcessor
               if @immediate_first_file && !@first_file_played
                 puts "🎵 Playing first audio file immediately: #{File.basename(audio_file_path)} for '#{text_content.slice(0, 40)}...'" if ENV['DEBUG']
                 
+                # Debug timing: Queue to playback delay
+                if ENV['DEBUG'] && queue_retrieve_time
+                  queue_to_playback_delay = Time.now - queue_retrieve_time
+                  puts "🎵 [DEBUG] Queue→Playback delay: #{(queue_to_playback_delay * 1000).round(0)}ms"
+                end
+                
                 start_time = Time.now
+                
+                # Debug timing: Track first actual audio playback
+                if ENV['DEBUG'] && @debug_track_first_playback
+                  @debug_track_first_playback = false  # Only track once
+                  first_playback_start = Time.now
+                  if @debug_first_audio_time
+                    text_to_playback_ms = ((first_playback_start - @debug_first_audio_time) * 1000).round(0)
+                    puts "🎵 [DEBUG] First audio playback started in #{text_to_playback_ms}ms from first text"
+                    # Store for later retrieval by voice agent
+                    @debug_first_playback_time = first_playback_start
+                  end
+                end
+                
                 success = play_audio_file(audio_file_path)
                 playback_time = Time.now - start_time
                 
@@ -1133,6 +1215,12 @@ class AudioProcessor
                   text_summary = @audio_buffer.map { |item| item[:text].slice(0, 20) }.join(' → ')
                   
                   puts "🎵 Playing concatenated audio (#{@audio_buffer.length} files): #{text_summary}..." if ENV['DEBUG']
+                  
+                  # Debug timing: Queue to concatenated playback delay
+                  if ENV['DEBUG'] && queue_retrieve_time
+                    queue_to_concat_delay = Time.now - queue_retrieve_time
+                    puts "🎵 [DEBUG] Queue→Concatenated delay: #{(queue_to_concat_delay * 1000).round(0)}ms"
+                  end
                   
                   start_time = Time.now
                   success = play_concatenated_audio(audio_files)
@@ -1161,6 +1249,12 @@ class AudioProcessor
               end
             else
               # Original individual playback method
+              # Debug timing: Queue to individual playback delay
+              if ENV['DEBUG'] && queue_retrieve_time
+                queue_to_individual_delay = Time.now - queue_retrieve_time
+                puts "🎵 [DEBUG] Queue→Individual delay: #{(queue_to_individual_delay * 1000).round(0)}ms"
+              end
+              
               start_time = Time.now
               puts "🔊 Playing audio file #{processed_count + 1}: #{File.basename(audio_file_path)} for '#{text_content.slice(0, 40)}...'" if ENV['DEBUG']
               

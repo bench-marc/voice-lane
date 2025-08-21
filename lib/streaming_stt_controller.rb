@@ -299,7 +299,7 @@ class StreamingSTTController
           # Process each result
           results.each do |result|
             if @callback && result['text'] && !result['text'].empty?
-              puts "📝 Received transcription: '#{result['text']}' (#{result['duration']&.round(2)}s)"
+              puts "📝 Received transcription: '#{result['text']}' (#{result['duration']&.round(2)}s)" if ENV['DEBUG']
               @callback.call(result['text'], result['duration'])
             end
           end

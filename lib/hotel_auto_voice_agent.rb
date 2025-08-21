@@ -87,9 +87,9 @@ class HotelAutoVoiceAgent
           status = @streaming_stt.get_service_status
           if status && status['statistics']
             stats = status['statistics']
-            puts "🎤 Streaming... (#{stats['total_processed']} utterances processed, avg #{(stats['avg_processing_time'] * 1000)&.round(0)}ms latency)"
+            puts "🎤 Streaming... (#{stats['total_processed']} utterances processed, avg #{(stats['avg_processing_time'] * 1000)&.round(0)}ms latency)" if ENV['DEBUG']
           else
-            puts "🎤 Streaming... (waiting for hotel staff to speak)"
+            puts "🎤 Streaming... (waiting for hotel staff to speak)" if ENV['DEBUG']
           end
         end
         
@@ -138,6 +138,12 @@ class HotelAutoVoiceAgent
     """
     return if @speaking || !@call_active || text.nil? || text.strip.empty?
     
+    # Debug timing: Record when speech transcription is received
+    if ENV['DEBUG']
+      @debug_speech_received_at = Time.now
+      puts "📥 [DEBUG] Speech received: '#{text}' (#{duration&.round(2)}s audio) at #{@debug_speech_received_at.strftime('%H:%M:%S.%3N')}"
+    end
+    
     puts "🏨 Hotel (streaming #{duration&.round(2)}s): #{text}"
     
     # Process the speech using existing logic
@@ -174,29 +180,91 @@ class HotelAutoVoiceAgent
     # Generate agent response using streaming
     puts "🤖 Agent: " # Start the line
     
+    # Debug timing: LLM processing start
+    if ENV['DEBUG']
+      @debug_llm_start = Time.now
+      puts "🧠 [DEBUG] Starting LLM processing at #{@debug_llm_start.strftime('%H:%M:%S.%3N')}"
+    end
+    
     @speaking = true
     # Streaming service handles agent speaking state internally
     
     # Ensure clean session start by stopping any previous streaming
     @audio_processor.stop_streaming_tts
     sleep(0.1) # Brief pause to ensure cleanup
+    
+    # Debug timing: TTS initialization
+    if ENV['DEBUG']
+      @debug_tts_init_start = Time.now
+      puts "🔊 [DEBUG] Initializing TTS at #{@debug_tts_init_start.strftime('%H:%M:%S.%3N')}"
+    end
+    
     @audio_processor.start_streaming_tts
+    
+    if ENV['DEBUG']
+      @debug_tts_init_end = Time.now
+      puts "🔊 [DEBUG] TTS initialized in #{((@debug_tts_init_end - @debug_tts_init_start) * 1000).round(0)}ms"
+    end
     
     agent_reply = ""
     final_response = nil
+    @debug_first_chunk_received = false
+    @debug_first_audio_sent = false
     
     begin
       final_response = @ollama_client.generate_response_stream(text) do |chunk, is_done|
         if !is_done && !chunk.empty?
+          # Debug timing: First LLM chunk received
+          if ENV['DEBUG'] && !@debug_first_chunk_received
+            @debug_first_chunk_received = true
+            @debug_first_chunk_time = Time.now
+            puts "🧠 [DEBUG] First LLM chunk received in #{((@debug_first_chunk_time - @debug_llm_start) * 1000).round(0)}ms"
+          end
+          
           # Stream chunk to TTS and display
           print chunk
           STDOUT.flush
           agent_reply += chunk
+          
+          # Debug timing: First audio sent to TTS
+          if ENV['DEBUG'] && !@debug_first_audio_sent
+            @debug_first_audio_sent = true
+            @debug_first_audio_time = Time.now
+            puts "🔊 [DEBUG] First text sent to TTS in #{((@debug_first_audio_time - @debug_llm_start) * 1000).round(0)}ms"
+          end
+          
           @audio_processor.stream_text_chunk(chunk, false)
+          
+          # Set up callback for first audio playback tracking
+          if ENV['DEBUG'] && !@debug_first_audio_played
+            @debug_first_audio_played = true  # Mark as tracked to avoid duplicates
+            # Set a flag in audio processor to track when first playback actually starts
+            @audio_processor.instance_variable_set(:@debug_first_audio_time, @debug_first_audio_time)
+            @audio_processor.instance_variable_set(:@debug_track_first_playback, true)
+          end
         elsif is_done
+          # Debug timing: LLM processing completed
+          if ENV['DEBUG']
+            @debug_llm_end = Time.now
+            puts "🧠 [DEBUG] LLM processing completed in #{((@debug_llm_end - @debug_llm_start) * 1000).round(0)}ms"
+          end
+          
           # Final processing
           @audio_processor.stream_text_chunk("", true)
+          
+          # Debug timing: TTS completion
+          if ENV['DEBUG']
+            @debug_tts_complete_start = Time.now
+            puts "🔊 [DEBUG] Finalizing TTS at #{@debug_tts_complete_start.strftime('%H:%M:%S.%3N')}"
+          end
+          
           @audio_processor.stop_streaming_tts
+          
+          if ENV['DEBUG']
+            @debug_tts_complete_end = Time.now
+            puts "🔊 [DEBUG] TTS finalized in #{((@debug_tts_complete_end - @debug_tts_complete_start) * 1000).round(0)}ms"
+          end
+          
           puts "" # New line after streaming
         end
       end
@@ -212,6 +280,33 @@ class HotelAutoVoiceAgent
     ensure
       @speaking = false
       # Streaming service handles agent speaking state internally
+      
+      # Debug timing: Total pipeline summary
+      if ENV['DEBUG'] && @debug_speech_received_at
+        @debug_pipeline_end = Time.now
+        total_pipeline_ms = ((@debug_pipeline_end - @debug_speech_received_at) * 1000).round(0)
+        puts "⏱️  [DEBUG] TOTAL PIPELINE: #{total_pipeline_ms}ms (Speech→Response complete)"
+        
+        # Additional timing breakdown if available
+        if @debug_llm_start && @debug_first_chunk_time
+          stt_to_llm_ms = ((@debug_llm_start - @debug_speech_received_at) * 1000).round(0)
+          llm_first_response_ms = ((@debug_first_chunk_time - @debug_llm_start) * 1000).round(0)
+          puts "📊 [DEBUG] BREAKDOWN: STT→LLM: #{stt_to_llm_ms}ms, LLM first chunk: #{llm_first_response_ms}ms"
+        end
+        
+        # TTS-specific timing breakdown - get actual playback time from audio processor
+        audio_processor_playback_time = @audio_processor.instance_variable_get(:@debug_first_playback_time)
+        if @debug_first_audio_time && audio_processor_playback_time
+          text_to_audio_ms = ((audio_processor_playback_time - @debug_first_audio_time) * 1000).round(0)
+          puts "📊 [DEBUG] TTS BREAKDOWN: Text→Audio playback: #{text_to_audio_ms}ms"
+          
+          # End-to-end user experience timing
+          speech_to_audio_ms = ((audio_processor_playback_time - @debug_speech_received_at) * 1000).round(0)
+          puts "🎯 [DEBUG] USER EXPERIENCE: Speech→Audio playing: #{speech_to_audio_ms}ms"
+        else
+          puts "📊 [DEBUG] TTS BREAKDOWN: First audio playback timing not captured"
+        end
+      end
     end
     
     # Use the response from streaming or fallback
@@ -236,12 +331,24 @@ class HotelAutoVoiceAgent
   def speak_response(text)
     return if text.nil? || text.empty?
     
+    # Debug timing: Non-streaming TTS
+    if ENV['DEBUG']
+      @debug_tts_batch_start = Time.now
+      puts "🔊 [DEBUG] Starting batch TTS at #{@debug_tts_batch_start.strftime('%H:%M:%S.%3N')}"
+    end
+    
     @speaking = true
     
     # Streaming service will pause transcription during TTS automatically
     
     begin
       @audio_processor.text_to_speech(text)
+      
+      if ENV['DEBUG']
+        @debug_tts_batch_end = Time.now
+        puts "🔊 [DEBUG] Batch TTS completed in #{((@debug_tts_batch_end - @debug_tts_batch_start) * 1000).round(0)}ms"
+      end
+      
     rescue => e
       puts "TTS error: #{e.message}"
     ensure
