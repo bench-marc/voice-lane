@@ -207,6 +207,65 @@ class StreamingSTTController
       return false
     end
   end
+  
+  def reset_audio_stream
+    """
+    Reset the audio stream to clear any buffered audio from previous sessions
+    This stops and restarts the audio capture to ensure clean state
+    """
+    return false unless service_running?
+    
+    begin
+      puts "🔄 Resetting STT audio stream..." if ENV['DEBUG']
+      
+      # First, stop any active streaming
+      if @active
+        puts "🛑 Stopping active streaming before reset..." if ENV['DEBUG']
+        stop_streaming_transcription
+        
+        # Wait for streaming to actually stop
+        timeout_count = 0
+        while @active && timeout_count < 10
+          sleep(0.1)
+          timeout_count += 1
+        end
+        
+        if @active
+          puts "⚠️ Streaming did not stop cleanly, forcing reset..." if ENV['DEBUG']
+          @active = false
+        end
+      end
+      
+      # Make HTTP request to reset audio stream
+      uri = URI("http://#{@host}:#{@port}/reset_audio")
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = 5
+      
+      request = Net::HTTP::Post.new(uri)
+      request['Content-Type'] = 'application/json'
+      request.body = {}.to_json
+      
+      response = http.request(request)
+      
+      if response.code == '200'
+        puts "✅ Audio stream reset successful" if ENV['DEBUG']
+        return true
+      else
+        puts "⚠️ Audio stream reset failed: HTTP #{response.code}" if ENV['DEBUG']
+        # Fallback: try restarting the entire service
+        puts "🔄 Attempting service restart as fallback..." if ENV['DEBUG']
+        restart_service
+        return true
+      end
+      
+    rescue => e
+      puts "❌ Error resetting audio stream: #{e.message}" if ENV['DEBUG']
+      # Fallback: restart service
+      puts "🔄 Attempting service restart as fallback..." if ENV['DEBUG']
+      restart_service
+      return true
+    end
+  end
 
   def start_streaming_transcription(callback = nil, &block)
     """
@@ -229,6 +288,7 @@ class StreamingSTTController
       uri = URI("http://#{@host}:#{@port}/start_streaming")
       http = Net::HTTP.new(uri.host, uri.port)
       http.read_timeout = 5
+      http.open_timeout = 3  # Add connection timeout
 
       request = Net::HTTP::Post.new(uri)
       request['Content-Type'] = 'application/json'

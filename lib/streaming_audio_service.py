@@ -375,7 +375,12 @@ class StreamingAudioService:
             # Clean transcription
             clean_text = self._clean_transcription(transcription)
             
-            logger.info(f"📝 Transcribed: '{clean_text}' ({processing_time:.2f}s processing)")
+            # Enhanced logging for debugging phantom results
+            if clean_text:
+                logger.info(f"📝 Transcribed: '{clean_text}' ({processing_time:.2f}s processing, {audio_duration:.2f}s audio)")
+                logger.debug(f"🔍 Source: audio_duration={audio_duration:.3f}s, buffer_samples={len(audio_data)}, processing_time={processing_time:.3f}s")
+            else:
+                logger.debug(f"🔍 Empty transcription from {audio_duration:.2f}s audio, processing_time={processing_time:.3f}s")
             
             # Store result for client polling
             if clean_text:
@@ -396,6 +401,7 @@ class StreamingAudioService:
                             except queue.Empty:
                                 pass
                         self.transcription_results.put_nowait(result_data)
+                        logger.debug(f"📤 Result queued: '{clean_text}' (queue size: ~{self.transcription_results.qsize()})")
                 except queue.Full:
                     logger.warning("⚠️ Results queue full, dropping transcription")
             
@@ -577,6 +583,25 @@ class StreamingAudioService:
         
         return results
 
+    def clear_result_queue(self):
+        """Clear all pending transcription results from the queue"""
+        try:
+            cleared_count = 0
+            while True:
+                try:
+                    self.transcription_results.get_nowait()
+                    cleared_count += 1
+                except queue.Empty:
+                    break
+            
+            if cleared_count > 0:
+                logger.info(f"🧹 Cleared {cleared_count} pending transcription results")
+            else:
+                logger.debug("✅ No pending transcription results to clear")
+                
+        except Exception as e:
+            logger.error(f"❌ Error clearing result queue: {e}")
+
     def get_status(self):
         """Get service status and performance statistics"""
         return {
@@ -624,6 +649,8 @@ class StreamingAudioHTTPHandler(BaseHTTPRequestHandler):
             self.handle_start_streaming()
         elif self.path == '/stop_streaming':
             self.handle_stop_streaming()
+        elif self.path == '/reset_audio':
+            self.handle_reset_audio()
         else:
             self.send_error(404)
 
@@ -666,6 +693,24 @@ class StreamingAudioHTTPHandler(BaseHTTPRequestHandler):
             self.send_json_response({"status": "streaming_stopped"})
             
         except Exception as e:
+            self.send_json_response({"status": "error", "message": str(e)})
+
+    def handle_reset_audio(self):
+        """Handle audio stream reset request"""
+        try:
+            # Stop current capture
+            self.server.service.stop_realtime_capture()
+            
+            # Clear any buffered results
+            self.server.service.clear_result_queue()
+            
+            # Reset audio stream state
+            logger.info("🔄 Audio stream reset requested")
+            
+            self.send_json_response({"status": "audio_reset_complete"})
+            
+        except Exception as e:
+            logger.error(f"❌ Audio reset error: {e}")
             self.send_json_response({"status": "error", "message": str(e)})
 
     def send_json_response(self, data):

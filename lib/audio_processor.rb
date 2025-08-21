@@ -936,9 +936,9 @@ class AudioProcessor
     @tts_thread_mutex.synchronize { @active_tts_threads += 1 }
     puts "🧵 Active TTS threads: #{@active_tts_threads}" if ENV['DEBUG']
     
-    # Generate audio file in background thread
-    Thread.new do
-      begin
+    # For proper ordering, generate sentences sequentially (not in parallel)
+    # Only the final text can be processed in parallel
+    begin
         puts "🎤 Starting TTS generation for: '#{sentence_text.slice(0, 50)}...'" if ENV['DEBUG']
         
         # Debug timing: Audio generation start
@@ -982,14 +982,13 @@ class AudioProcessor
           end
         end
         
-      rescue => e
-        puts "❌ TTS generation thread error: #{e.message}"
-        puts "Error details: #{e.backtrace.first(3).join(', ')}" if ENV['DEBUG']
-      ensure
-        # Decrement active TTS thread counter
-        @tts_thread_mutex.synchronize { @active_tts_threads -= 1 }
-        puts "🧵 Active TTS threads: #{@active_tts_threads}" if ENV['DEBUG']
-      end
+    rescue => e
+      puts "❌ TTS generation error: #{e.message}"
+      puts "Error details: #{e.backtrace.first(3).join(', ')}" if ENV['DEBUG']
+    ensure
+      # Decrement active TTS thread counter
+      @tts_thread_mutex.synchronize { @active_tts_threads -= 1 }
+      puts "🧵 Active TTS threads: #{@active_tts_threads}" if ENV['DEBUG']
     end
   end
 

@@ -62,9 +62,13 @@ class HotelAutoVoiceAgent
       end
     end
     
-    # Clear any stale transcription results from previous sessions
-    puts "🧹 Clearing any stale STT results..." if ENV['DEBUG']
+    # Clear any stale transcription results and reset audio stream from previous sessions
+    puts "🧹 Clearing STT results and resetting audio stream..." if ENV['DEBUG']
     @streaming_stt.clear_transcription_results
+    @streaming_stt.reset_audio_stream
+    
+    # Allow time for reset to complete before starting new session
+    sleep(0.5)
     
     # Start streaming transcription with callback
     streaming_callback = method(:handle_streaming_hotel_speech)
