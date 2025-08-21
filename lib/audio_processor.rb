@@ -48,6 +48,13 @@ class AudioProcessor
     @immediate_first_file = true  # Play first audio file immediately without buffering
     @concatenation_buffer_size = 2  # Number of files to buffer before concatenating (0=immediate, 1+=batch)
     @trim_silence = true  # Enable silence trimming for reduced gaps between sentences
+    
+    # Streaming STT configuration
+    @streaming_stt_service = nil
+    @streaming_stt_host = '127.0.0.1'
+    @streaming_stt_port = 8769
+    @streaming_stt_active = false
+    @streaming_stt_callback = nil
   end
 
   def record_audio(duration = 5)
@@ -1328,5 +1335,243 @@ class AudioProcessor
     cleaned = cleaned[0].upcase + cleaned[1..-1] if cleaned.length > 0
     
     cleaned.strip
+  end
+
+  # ========== STREAMING SPEECH-TO-TEXT METHODS ==========
+  public
+
+  def start_streaming_stt(callback = nil, &block)
+    """
+    Start streaming speech-to-text with real-time transcription
+    Optimized for minimal latency with silence-based segmentation
+    """
+    return false if @streaming_stt_active
+
+    @streaming_stt_callback = callback || block
+    
+    unless @streaming_stt_callback
+      puts "❌ No callback provided for streaming STT"
+      return false
+    end
+
+    puts "🎤 Starting streaming speech-to-text..."
+
+    begin
+      # Start the streaming audio service if not already running
+      unless streaming_stt_service_running?
+        puts "🚀 Starting streaming audio service..."
+        start_streaming_stt_service
+        sleep(2)  # Give service time to start
+      end
+
+      # Make HTTP request to start streaming
+      uri = URI("http://#{@streaming_stt_host}:#{@streaming_stt_port}/start_streaming")
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = 5
+
+      request = Net::HTTP::Post.new(uri)
+      request['Content-Type'] = 'application/json'
+      request.body = {}.to_json
+
+      response = http.request(request)
+
+      if response.code == '200'
+        @streaming_stt_active = true
+        puts "✅ Streaming STT started successfully"
+        
+        # Start monitoring thread for transcription results
+        start_stt_monitoring_thread
+        
+        return true
+      else
+        puts "❌ Failed to start streaming STT: HTTP #{response.code}"
+        return false
+      end
+
+    rescue => e
+      puts "❌ Error starting streaming STT: #{e.message}"
+      return false
+    end
+  end
+
+  def stop_streaming_stt
+    """
+    Stop streaming speech-to-text
+    """
+    return unless @streaming_stt_active
+
+    puts "🛑 Stopping streaming STT..."
+
+    begin
+      # Make HTTP request to stop streaming
+      uri = URI("http://#{@streaming_stt_host}:#{@streaming_stt_port}/stop_streaming")
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = 5
+
+      request = Net::HTTP::Post.new(uri)
+      request['Content-Type'] = 'application/json'
+      request.body = {}.to_json
+
+      response = http.request(request)
+
+      if response.code == '200'
+        puts "✅ Streaming STT stopped"
+      else
+        puts "⚠️ HTTP error stopping streaming: #{response.code}"
+      end
+
+    rescue => e
+      puts "❌ Error stopping streaming STT: #{e.message}"
+    end
+
+    @streaming_stt_active = false
+    @streaming_stt_callback = nil
+  end
+
+  def streaming_stt_active?
+    """
+    Check if streaming STT is currently active
+    """
+    @streaming_stt_active
+  end
+
+  def streaming_stt_service_running?
+    """
+    Check if the streaming audio service is running
+    """
+    begin
+      uri = URI("http://#{@streaming_stt_host}:#{@streaming_stt_port}/health")
+      response = Net::HTTP.get_response(uri)
+      response.code == '200'
+    rescue
+      false
+    end
+  end
+
+  def get_streaming_stt_status
+    """
+    Get streaming STT service status and statistics
+    """
+    begin
+      uri = URI("http://#{@streaming_stt_host}:#{@streaming_stt_port}/status")
+      response = Net::HTTP.get_response(uri)
+      
+      if response.code == '200'
+        JSON.parse(response.body)
+      else
+        {"status" => "error", "message" => "Service not available"}
+      end
+    rescue => e
+      {"status" => "error", "message" => e.message}
+    end
+  end
+
+  def transcribe_file_streaming(audio_file)
+    """
+    Transcribe an audio file using the streaming service for consistency
+    """
+    return {"status" => "error", "message" => "File not found"} unless File.exist?(audio_file)
+
+    begin
+      uri = URI("http://#{@streaming_stt_host}:#{@streaming_stt_port}/transcribe_file")
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = 30  # Longer timeout for file processing
+
+      request = Net::HTTP::Post.new(uri)
+      request['Content-Type'] = 'application/json'
+      request.body = {
+        audio_file: File.expand_path(audio_file)
+      }.to_json
+
+      response = http.request(request)
+
+      if response.code == '200'
+        result = JSON.parse(response.body)
+        puts "📝 Streaming transcription: '#{result['transcription']}' (#{result['processing_time']&.round(2)}s)"
+        return result
+      else
+        return {"status" => "error", "message" => "HTTP error: #{response.code}"}
+      end
+
+    rescue => e
+      return {"status" => "error", "message" => e.message}
+    end
+  end
+
+  def set_streaming_stt_config(host: nil, port: nil)
+    """
+    Configure streaming STT service connection
+    """
+    @streaming_stt_host = host if host
+    @streaming_stt_port = port if port
+    puts "🔧 Streaming STT config updated: #{@streaming_stt_host}:#{@streaming_stt_port}"
+  end
+
+  private
+
+  def start_streaming_stt_service
+    """
+    Start the streaming audio service in the background
+    """
+    venv_python = File.expand_path('../venv_whisper_streaming/bin/python', __dir__)
+    service_script = File.join(__dir__, 'streaming_audio_service.py')
+    
+    unless File.exist?(venv_python)
+      puts "❌ Streaming venv not found: #{venv_python}"
+      return false
+    end
+
+    unless File.exist?(service_script)
+      puts "❌ Streaming service script not found: #{service_script}"
+      return false
+    end
+
+    begin
+      # Start service in background
+      @streaming_stt_service = spawn(
+        "#{venv_python} #{service_script} server #{@streaming_stt_port} tiny",
+        out: '/dev/null',
+        err: '/dev/null',
+        pgroup: true
+      )
+
+      # Detach process so it can run independently
+      Process.detach(@streaming_stt_service)
+
+      puts "🚀 Streaming audio service started (PID: #{@streaming_stt_service})"
+      return true
+
+    rescue => e
+      puts "❌ Failed to start streaming service: #{e.message}"
+      return false
+    end
+  end
+
+  def start_stt_monitoring_thread
+    """
+    Start background thread to monitor streaming transcription results
+    This is a placeholder - in a real implementation, we'd use WebSockets
+    or Server-Sent Events for real-time updates
+    """
+    Thread.new do
+      puts "🔄 STT monitoring thread started (placeholder)"
+      
+      # For now, this is just a monitoring thread
+      # Real implementation would use WebSocket connections
+      # to get live transcription results
+      
+      while @streaming_stt_active
+        sleep(0.5)
+        
+        # Check service status periodically
+        status = get_streaming_stt_status
+        if status["status"] != "running"
+          puts "⚠️ Streaming STT service not running"
+          break
+        end
+      end
+      
+      puts "🔄 STT monitoring thread ended"
+    end
   end
 end

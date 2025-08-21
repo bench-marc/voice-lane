@@ -1,6 +1,6 @@
 require_relative 'audio_processor'
 require_relative 'hotel_booking_agent'
-require_relative 'continuous_audio_monitor'
+require_relative 'streaming_stt_controller'
 
 class HotelAutoVoiceAgent
   def initialize
@@ -13,10 +13,13 @@ class HotelAutoVoiceAgent
     puts "🚀 Initializing TTS engine..."
     @audio_processor.start_kokoro_server
     
-    # Create callbacks for continuous audio monitor
-    speech_callback = method(:handle_hotel_speech)
-    speaking_callback = method(:agent_speaking?)
-    @audio_monitor = ContinuousAudioMonitor.new(speech_callback, speaking_callback)
+    # Initialize streaming STT controller for real-time transcription
+    @streaming_stt = StreamingSTTController.new(
+      host: '127.0.0.1',
+      port: 8770,  # Use streaming service port
+      model: 'tiny',  # Fast model for hotel calls
+      language: nil   # Auto-detect language
+    )
     
     # Set up signal handlers for graceful shutdown
     setup_signal_handlers
@@ -48,33 +51,45 @@ class HotelAutoVoiceAgent
 
     @call_active = true
     
-    puts "🎤 Starting continuous listening for hotel staff..."
+    puts "🎤 Starting streaming transcription for hotel staff..."
     
-    # Start continuous audio monitoring
-    unless @audio_monitor.start_listening
-      puts "❌ Failed to start continuous audio monitoring"
+    # Start streaming STT service if needed
+    unless @streaming_stt.service_running?
+      puts "🚀 Starting streaming STT service..."
+      unless @streaming_stt.start_service
+        puts "❌ Failed to start streaming STT service"
+        return false
+      end
+    end
+    
+    # Start streaming transcription with callback
+    streaming_callback = method(:handle_streaming_hotel_speech)
+    unless @streaming_stt.start_streaming_transcription(&streaming_callback)
+      puts "❌ Failed to start streaming transcription"
       return false
     end
     
-    puts "🎤 System is now actively listening for hotel staff speech..."
-    puts "💬 The system will automatically respond when hotel staff speaks"
+    puts "✅ Real-time streaming transcription active"
+    puts "🎤 System is now actively listening with minimal latency..."
+    puts "💬 Transcription happens while hotel staff speaks (streaming mode)"
     puts "⏹️  Press Ctrl+C to stop the call at any time"
     puts ""
     
     # Keep call active
     begin
       loop_count = 0
-      while @call_active && @audio_monitor.listening?
+      while @call_active && @streaming_stt.active?
         sleep(0.5)
         loop_count += 1
         
         # Show activity indicator every 10 seconds
         if loop_count % 20 == 0  # Every 10 seconds (20 * 0.5s)
-          status = @audio_monitor.get_status
-          if status
-            puts "🎤 Listening... (#{status['total_chunks']} audio chunks processed, #{status['processed_utterances']} speech events detected)"
+          status = @streaming_stt.get_service_status
+          if status && status['statistics']
+            stats = status['statistics']
+            puts "🎤 Streaming... (#{stats['total_processed']} utterances processed, avg #{(stats['avg_processing_time'] * 1000)&.round(0)}ms latency)"
           else
-            puts "🎤 Listening... (waiting for hotel staff to speak)"
+            puts "🎤 Streaming... (waiting for hotel staff to speak)"
           end
         end
         
@@ -106,16 +121,31 @@ class HotelAutoVoiceAgent
 
   def stop_call
     @call_active = false
-    @audio_monitor.stop_listening
+    if @streaming_stt.active?
+      puts "🛑 Stopping streaming transcription..."
+      @streaming_stt.stop_streaming_transcription
+    end
     @audio_processor.stop_kokoro_server
+    puts "📞 Call stopped"
   end
 
   private
 
-  def handle_hotel_speech(text)
+  def handle_streaming_hotel_speech(text, duration)
+    """
+    Handle real-time transcription from streaming STT service
+    Called immediately when silence is detected and speech is transcribed
+    """
     return if @speaking || !@call_active || text.nil? || text.strip.empty?
     
-    puts "🏨 Hotel: #{text}"
+    puts "🏨 Hotel (streaming #{duration&.round(2)}s): #{text}"
+    
+    # Process the speech using existing logic
+    handle_hotel_speech(text)
+  end
+
+  def handle_hotel_speech(text)
+    return if @speaking || !@call_active || text.nil? || text.strip.empty?
     
     # If this is the first message (hotel greeting), generate opening response
     # if @ollama_client.conversation_length == 0
@@ -145,7 +175,7 @@ class HotelAutoVoiceAgent
     puts "🤖 Agent: " # Start the line
     
     @speaking = true
-    @audio_monitor.set_agent_speaking(true)
+    # Streaming service handles agent speaking state internally
     
     # Ensure clean session start by stopping any previous streaming
     @audio_processor.stop_streaming_tts
@@ -181,7 +211,7 @@ class HotelAutoVoiceAgent
       speak_response(agent_reply)
     ensure
       @speaking = false
-      @audio_monitor.set_agent_speaking(false)
+      # Streaming service handles agent speaking state internally
     end
     
     # Use the response from streaming or fallback
@@ -208,8 +238,7 @@ class HotelAutoVoiceAgent
     
     @speaking = true
     
-    # Notify audio monitor that agent is speaking
-    @audio_monitor.set_agent_speaking(true)
+    # Streaming service will pause transcription during TTS automatically
     
     begin
       @audio_processor.text_to_speech(text)
@@ -217,8 +246,7 @@ class HotelAutoVoiceAgent
       puts "TTS error: #{e.message}"
     ensure
       @speaking = false
-      # Notify audio monitor that agent finished speaking
-      @audio_monitor.set_agent_speaking(false)
+      # Streaming service will resume transcription automatically
     end
   end
 
@@ -230,8 +258,7 @@ class HotelAutoVoiceAgent
     
     @speaking = true
     
-    # Notify audio monitor that agent is speaking
-    @audio_monitor.set_agent_speaking(true)
+    # Streaming service will pause transcription during TTS automatically
     
     begin
       # Start streaming TTS
@@ -247,8 +274,7 @@ class HotelAutoVoiceAgent
       puts "Streaming TTS error: #{e.message}"
     ensure
       @speaking = false
-      # Notify audio monitor that agent finished speaking
-      @audio_monitor.set_agent_speaking(false)
+      # Streaming service will resume transcription automatically
     end
   end
 
