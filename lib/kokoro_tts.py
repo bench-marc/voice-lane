@@ -37,7 +37,7 @@ class KokoroTTS:
             print(json.dumps({"status": "error", "message": f"Failed to initialize Kokoro: {e}"}))
             sys.exit(1)
     
-    def generate_speech(self, text, voice='af_sarah', speed=1.0, output_file=None):
+    def generate_speech(self, text, voice='af_sarah', speed=1.0, sample_rate=24000, output_file=None):
         """
         Generate speech from text using Kokoro TTS
         
@@ -45,6 +45,7 @@ class KokoroTTS:
             text (str): Text to convert to speech
             voice (str): Voice to use (default: af_sarah - professional female)
             speed (float): Speech speed multiplier (default: 1.0)
+            sample_rate (int): Output sample rate in Hz (default: 24000, options: 16000, 22050, 24000)
             output_file (str): Path to save audio file (optional)
         
         Returns:
@@ -87,15 +88,24 @@ class KokoroTTS:
                 output_file = temp_file.name
                 temp_file.close()
             
-            # Save audio to file (Kokoro outputs at 24kHz)
-            sf.write(output_file, full_audio, 24000)
+            # Resample if different sample rate requested
+            if sample_rate != 24000:
+                # Simple resampling using numpy interpolation
+                original_length = len(full_audio)
+                new_length = int(original_length * sample_rate / 24000)
+                if new_length > 0:
+                    indices = np.linspace(0, original_length - 1, new_length)
+                    full_audio = np.interp(indices, np.arange(original_length), full_audio)
+            
+            # Save audio to file with requested sample rate
+            sf.write(output_file, full_audio, sample_rate)
             
             return {
                 "status": "success", 
                 "file": output_file,
-                "sample_rate": 24000,
+                "sample_rate": sample_rate,
                 "voice": voice,
-                "duration": len(full_audio) / 24000
+                "duration": len(full_audio) / sample_rate
             }
             
         except Exception as e:
@@ -116,7 +126,7 @@ def main():
             "status": "error", 
             "message": "Usage: python kokoro_tts.py <command> [args...]",
             "commands": {
-                "generate <text> [voice] [speed] [output_file]": "Generate speech from text",
+                "generate <text> [voice] [speed] [sample_rate] [output_file]": "Generate speech from text",
                 "voices": "List available voices"
             }
         }))
@@ -133,9 +143,10 @@ def main():
         text = sys.argv[2]
         voice = sys.argv[3] if len(sys.argv) > 3 else 'af_aoede'
         speed = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
-        output_file = sys.argv[5] if len(sys.argv) > 5 else None
+        sample_rate = int(sys.argv[5]) if len(sys.argv) > 5 else 24000
+        output_file = sys.argv[6] if len(sys.argv) > 6 else None
         
-        result = tts.generate_speech(text, voice, speed, output_file)
+        result = tts.generate_speech(text, voice, speed, sample_rate, output_file)
         print(json.dumps(result))
         
     elif command == "voices":

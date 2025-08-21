@@ -178,6 +178,36 @@ class StreamingSTTController
     end
   end
 
+  def clear_transcription_results
+    """
+    Clear any pending transcription results from previous sessions
+    """
+    return false unless service_running?
+    
+    begin
+      # Get and discard any pending results to clear the queue
+      uri = URI("http://#{@host}:#{@port}/results")
+      response = Net::HTTP.get_response(uri)
+      
+      if response.code == '200'
+        data = JSON.parse(response.body)
+        results = data['results'] || []
+        if results.any?
+          puts "🧹 Cleared #{results.length} stale STT results from previous session" if ENV['DEBUG']
+        else
+          puts "✅ No stale STT results to clear" if ENV['DEBUG']
+        end
+        return true
+      else
+        puts "⚠️ Failed to clear STT results: HTTP #{response.code}" if ENV['DEBUG']
+        return false
+      end
+    rescue => e
+      puts "❌ Error clearing STT results: #{e.message}" if ENV['DEBUG']
+      return false
+    end
+  end
+
   def start_streaming_transcription(callback = nil, &block)
     """
     Start real-time streaming transcription with callback

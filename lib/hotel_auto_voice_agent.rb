@@ -62,6 +62,10 @@ class HotelAutoVoiceAgent
       end
     end
     
+    # Clear any stale transcription results from previous sessions
+    puts "🧹 Clearing any stale STT results..." if ENV['DEBUG']
+    @streaming_stt.clear_transcription_results
+    
     # Start streaming transcription with callback
     streaming_callback = method(:handle_streaming_hotel_speech)
     unless @streaming_stt.start_streaming_transcription(&streaming_callback)
@@ -138,9 +142,24 @@ class HotelAutoVoiceAgent
     """
     return if @speaking || !@call_active || text.nil? || text.strip.empty?
     
-    # Debug timing: Record when speech transcription is received
+    # Debug timing: Reset all timing variables for this interaction
     if ENV['DEBUG']
       @debug_speech_received_at = Time.now
+      @debug_llm_start = nil
+      @debug_first_chunk_time = nil
+      @debug_llm_end = nil
+      @debug_first_audio_time = nil
+      @debug_first_audio_played = false
+      @debug_tts_init_start = nil
+      @debug_tts_init_end = nil
+      @debug_tts_complete_start = nil
+      @debug_tts_complete_end = nil
+      @debug_pipeline_end = nil
+      @debug_first_chunk_received = false
+      @debug_first_audio_sent = false
+      # Reset audio processor debug timing as well
+      @audio_processor.instance_variable_set(:@debug_first_playback_time, nil)
+      @audio_processor.instance_variable_set(:@debug_track_first_playback, nil)
       puts "📥 [DEBUG] Speech received: '#{text}' (#{duration&.round(2)}s audio) at #{@debug_speech_received_at.strftime('%H:%M:%S.%3N')}"
     end
     
