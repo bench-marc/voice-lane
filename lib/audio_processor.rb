@@ -24,6 +24,11 @@ class AudioProcessor
     @kokoro_voice = 'af_aoede'  # User requested Aoede voice
     @tts_speed = 1.0
     
+    # Timing debug configuration
+    @debug_timing = ENV['DEBUG_TIMING'] == '1'
+    @timing_baseline = nil
+    @first_audio_played = false
+    
     # Kokoro server configuration
     @kokoro_server_host = '127.0.0.1'
     @kokoro_server_port = 8765
@@ -55,6 +60,34 @@ class AudioProcessor
     @streaming_stt_port = 8769
     @streaming_stt_active = false
     @streaming_stt_callback = nil
+  end
+
+  def log_timing(event_name, reset_baseline: false)
+    """Log timing event relative to baseline (silence detection)"""
+    return unless @debug_timing
+    
+    current_time = Time.now.to_f
+    
+    if reset_baseline || @timing_baseline.nil?
+      @timing_baseline = current_time
+      elapsed_ms = 0
+    else
+      elapsed_ms = ((current_time - @timing_baseline) * 1000).round(0)
+    end
+    
+    puts "⏱️  [T+#{elapsed_ms}ms] #{event_name}"
+  end
+
+  def sync_timing_baseline(baseline)
+    """Sync timing baseline with other components"""
+    @timing_baseline = baseline if @debug_timing
+  end
+
+  def reset_timing_state
+    """Reset timing state for new conversation"""
+    return unless @debug_timing
+    @timing_baseline = nil
+    @first_audio_played = false
   end
 
   def record_audio(duration = 5)
@@ -363,6 +396,11 @@ class AudioProcessor
                 when 'chunk'
                   chunk_count += 1
                   
+                  # T7: First audio chunk received from Kokoro
+                  if chunk_count == 1
+                    log_timing("First audio chunk received from Kokoro")
+                  end
+                  
                   # Decode base64 audio data
                   audio_b64 = data['audio_data']
                   audio_bytes = Base64.decode64(audio_b64)
@@ -502,6 +540,12 @@ class AudioProcessor
     Play an audio file using the system's default audio player
     """
     return unless audio_file && File.exist?(audio_file)
+    
+    # T8: Audio playback starts (first file only)
+    if @debug_timing && !@first_audio_played
+      @first_audio_played = true
+      log_timing("Audio playback started")
+    end
     
     # Try different audio players available on macOS
     players = ['afplay', 'play', 'aplay']

@@ -20,6 +20,12 @@ class StreamingSTTController
     @callback = nil
     @transcription_thread = nil
     @active = false
+    
+    # HTTP connection pooling for better performance
+    @http_connection = nil
+    @connection_mutex = Mutex.new
+    @max_retries = 3
+    @retry_delay = 0.5
   end
 
   def start_service
@@ -118,31 +124,22 @@ class StreamingSTTController
     """
     Check if the streaming service is running and healthy
     """
-    begin
-      uri = URI("http://#{@host}:#{@port}/health")
-      response = Net::HTTP.get_response(uri)
+    perform_http_request("/health", :get) do |response|
       response.code == '200'
-    rescue
-      false
-    end
+    end || false
   end
 
   def get_service_status
     """
     Get detailed service status and statistics
     """
-    begin
-      uri = URI("http://#{@host}:#{@port}/status")
-      response = Net::HTTP.get_response(uri)
-
+    perform_http_request("/status", :get) do |response|
       if response.code == '200'
         JSON.parse(response.body)
       else
         {"status" => "error", "message" => "Service not available"}
       end
-    rescue => e
-      {"status" => "error", "message" => e.message}
-    end
+    end || {"status" => "error", "message" => "Connection failed"}
   end
 
   def transcribe_file(audio_file)
@@ -184,11 +181,7 @@ class StreamingSTTController
     """
     return false unless service_running?
     
-    begin
-      # Get and discard any pending results to clear the queue
-      uri = URI("http://#{@host}:#{@port}/results")
-      response = Net::HTTP.get_response(uri)
-      
+    perform_http_request("/results", :get) do |response|
       if response.code == '200'
         data = JSON.parse(response.body)
         results = data['results'] || []
@@ -197,15 +190,12 @@ class StreamingSTTController
         else
           puts "✅ No stale STT results to clear" if ENV['DEBUG']
         end
-        return true
+        true
       else
         puts "⚠️ Failed to clear STT results: HTTP #{response.code}" if ENV['DEBUG']
-        return false
+        false
       end
-    rescue => e
-      puts "❌ Error clearing STT results: #{e.message}" if ENV['DEBUG']
-      return false
-    end
+    end || false
   end
   
   def reset_audio_stream
@@ -237,21 +227,19 @@ class StreamingSTTController
       end
       
       # Make HTTP request to reset audio stream
-      uri = URI("http://#{@host}:#{@port}/reset_audio")
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.read_timeout = 5
+      result = perform_http_request("/reset_audio", :post, {}.to_json) do |response|
+        if response.code == '200'
+          puts "✅ Audio stream reset successful" if ENV['DEBUG']
+          true
+        else
+          puts "⚠️ Audio stream reset failed: HTTP #{response.code}" if ENV['DEBUG']
+          false
+        end
+      end
       
-      request = Net::HTTP::Post.new(uri)
-      request['Content-Type'] = 'application/json'
-      request.body = {}.to_json
-      
-      response = http.request(request)
-      
-      if response.code == '200'
-        puts "✅ Audio stream reset successful" if ENV['DEBUG']
+      if result
         return true
       else
-        puts "⚠️ Audio stream reset failed: HTTP #{response.code}" if ENV['DEBUG']
         # Fallback: try restarting the entire service
         puts "🔄 Attempting service restart as fallback..." if ENV['DEBUG']
         restart_service
@@ -283,19 +271,7 @@ class StreamingSTTController
 
     puts "🎤 Starting streaming transcription..."
 
-    begin
-      # Make HTTP request to start streaming
-      uri = URI("http://#{@host}:#{@port}/start_streaming")
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.read_timeout = 5
-      http.open_timeout = 3  # Add connection timeout
-
-      request = Net::HTTP::Post.new(uri)
-      request['Content-Type'] = 'application/json'
-      request.body = {}.to_json
-
-      response = http.request(request)
-
+    result = perform_http_request("/start_streaming", :post, {}.to_json) do |response|
       if response.code == '200'
         @active = true
         puts "✅ Streaming transcription started"
@@ -303,16 +279,14 @@ class StreamingSTTController
         # Start monitoring thread
         start_monitoring_thread
 
-        return true
+        true
       else
         puts "❌ Failed to start streaming: HTTP #{response.code}"
-        return false
+        false
       end
-
-    rescue => e
-      puts "❌ Error starting streaming: #{e.message}"
-      return false
     end
+
+    result || false
   end
 
   def stop_streaming_transcription
@@ -323,27 +297,12 @@ class StreamingSTTController
 
     puts "🛑 Stopping streaming transcription..."
 
-    begin
-      # Make HTTP request to stop streaming
-      uri = URI("http://#{@host}:#{@port}/stop_streaming")
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.read_timeout = 5
-
-      request = Net::HTTP::Post.new(uri)
-      request['Content-Type'] = 'application/json'
-      request.body = {}.to_json
-
-      response = http.request(request)
-
+    perform_http_request("/stop_streaming", :post, {}.to_json) do |response|
       if response.code == '200'
         puts "✅ Streaming transcription stopped"
       else
         puts "⚠️ HTTP error stopping streaming: #{response.code}"
       end
-
-    rescue => e
-      # Silence errors in trap context to avoid warnings
-      puts "❌ Error stopping streaming: #{e.message}"
     end
 
     @active = false
@@ -353,6 +312,9 @@ class StreamingSTTController
     if @transcription_thread && @transcription_thread.alive?
       @transcription_thread.join(2)  # 2 second timeout
     end
+    
+    # Close HTTP connection when streaming stops to free resources
+    close_http_connection
   end
 
   def active?
@@ -373,6 +335,96 @@ class StreamingSTTController
   end
 
   private
+
+  def get_http_connection
+    """
+    Get or create a reusable HTTP connection with keep-alive
+    """
+    @connection_mutex.synchronize do
+      if @http_connection.nil? || !@http_connection.started?
+        @http_connection = Net::HTTP.new(@host, @port)
+        @http_connection.keep_alive_timeout = 30
+        @http_connection.read_timeout = 10
+        @http_connection.open_timeout = 5
+        @http_connection.start
+      end
+      @http_connection
+    end
+  rescue => e
+    puts "⚠️ HTTP connection error: #{e.message}" if ENV['DEBUG']
+    @http_connection = nil
+    nil
+  end
+
+  def close_http_connection
+    """
+    Close the HTTP connection
+    """
+    @connection_mutex.synchronize do
+      if @http_connection&.started?
+        @http_connection.finish
+      end
+      @http_connection = nil
+    end
+  rescue => e
+    puts "⚠️ Error closing HTTP connection: #{e.message}" if ENV['DEBUG']
+  end
+
+  def perform_http_request(path, method = :get, body = nil, headers = {})
+    """
+    Perform HTTP request with connection pooling and retry logic
+    """
+    retries = 0
+    
+    while retries < @max_retries
+      begin
+        http = get_http_connection
+        return nil unless http
+        
+        request = case method
+                 when :get
+                   Net::HTTP::Get.new(path)
+                 when :post
+                   req = Net::HTTP::Post.new(path)
+                   req['Content-Type'] = 'application/json'
+                   req.body = body if body
+                   req
+                 else
+                   raise "Unsupported HTTP method: #{method}"
+                 end
+        
+        headers.each { |k, v| request[k] = v }
+        
+        response = http.request(request)
+        
+        if block_given?
+          return yield(response)
+        else
+          return response
+        end
+        
+      rescue Net::ReadTimeout, Net::OpenTimeout, Errno::ECONNRESET, Errno::ECONNREFUSED => e
+        retries += 1
+        puts "⚠️ HTTP request failed (attempt #{retries}/#{@max_retries}): #{e.message}" if ENV['DEBUG']
+        
+        # Close connection on error to force reconnect
+        close_http_connection
+        
+        if retries < @max_retries
+          sleep(@retry_delay * retries)  # Exponential backoff
+        else
+          puts "❌ HTTP request failed after #{@max_retries} attempts"
+          return nil
+        end
+      rescue => e
+        puts "❌ Unexpected HTTP error: #{e.message}" if ENV['DEBUG']
+        close_http_connection
+        return nil
+      end
+    end
+    
+    nil
+  end
 
   def start_monitoring_thread
     """
@@ -431,19 +483,13 @@ class StreamingSTTController
     """
     Poll the streaming service for pending transcription results
     """
-    begin
-      uri = URI("http://#{@host}:#{@port}/results")
-      response = Net::HTTP.get_response(uri)
-
+    perform_http_request("/results", :get) do |response|
       if response.code == '200'
         data = JSON.parse(response.body)
-        return data['results'] || []
+        data['results'] || []
       else
-        return []
+        []
       end
-    rescue => e
-      # Silently fail to avoid spam in logs
-      return []
-    end
+    end || []
   end
 end

@@ -9,6 +9,10 @@ class HotelAutoVoiceAgent
     @speaking = false
     @call_active = false
     
+    # Timing debug configuration
+    @debug_timing = ENV['DEBUG_TIMING'] == '1'
+    @timing_baseline = nil
+    
     # Start Kokoro TTS server for fast speech generation
     puts "🚀 Initializing TTS engine..."
     @audio_processor.start_kokoro_server
@@ -18,7 +22,7 @@ class HotelAutoVoiceAgent
       host: '127.0.0.1',
       port: 8770,  # Use streaming service port
       model: 'tiny',  # Fast model for hotel calls
-      language: nil   # Auto-detect language
+      language: 'en'   # English language for better accuracy
     )
     
     # Set up signal handlers for graceful shutdown
@@ -139,11 +143,33 @@ class HotelAutoVoiceAgent
 
   private
 
+  def log_timing(event_name, reset_baseline: false)
+    """Log timing event relative to baseline (silence detection)"""
+    return unless @debug_timing
+    
+    current_time = Time.now.to_f
+    
+    if reset_baseline || @timing_baseline.nil?
+      @timing_baseline = current_time
+      elapsed_ms = 0
+    else
+      elapsed_ms = ((current_time - @timing_baseline) * 1000).round(0)
+    end
+    
+    puts "⏱️  [T+#{elapsed_ms}ms] #{event_name}"
+  end
+
   def handle_streaming_hotel_speech(text, duration)
     """
     Handle real-time transcription from streaming STT service
     Called immediately when silence is detected and speech is transcribed
     """
+    # Reset timing baseline for each new hotel input (conversation turn)
+    log_timing("Ruby callback received transcription", reset_baseline: true)
+    # Reset audio processor timing state for new conversation turn
+    @audio_processor.reset_timing_state
+    @audio_processor.sync_timing_baseline(@timing_baseline)
+    
     return if @speaking || !@call_active || text.nil? || text.strip.empty?
     
     # Debug timing: Reset all timing variables for this interaction
@@ -175,33 +201,12 @@ class HotelAutoVoiceAgent
 
   def handle_hotel_speech(text)
     return if @speaking || !@call_active || text.nil? || text.strip.empty?
-    
-    # If this is the first message (hotel greeting), generate opening response
-    # if @ollama_client.conversation_length == 0
-    #   opening = @ollama_client.generate_opening_statement
-    #   puts "🤖 Agent: #{opening}"
-    #   speak_response(opening)
-    #
-    #   # Add opening statement to conversation history
-    #   @ollama_client.add_assistant_message(opening)
-    #   return
-    # end
-    
-    # Check for call end signals
-    if text.downcase.match?(/(goodbye|thank you.*day|have a good|bye|end.*call)/)
-      puts "📞 Hotel is ending the call..."
-      
-      # Generate brief closing response
-      closing = "Thank you, goodbye!"
-      puts "🤖 Agent: #{closing}"
-      speak_response(closing)
-      
-      stop_call
-      return
-    end
 
     # Generate agent response using streaming
     puts "🤖 Agent: " # Start the line
+    
+    # T3: LLM request sent
+    log_timing("LLM request sent to Ollama")
     
     # Debug timing: LLM processing start
     if ENV['DEBUG']
@@ -237,11 +242,15 @@ class HotelAutoVoiceAgent
     begin
       final_response = @ollama_client.generate_response_stream(text) do |chunk, is_done|
         if !is_done && !chunk.empty?
-          # Debug timing: First LLM chunk received
-          if ENV['DEBUG'] && !@debug_first_chunk_received
+          # T4: First LLM response received
+          if !@debug_first_chunk_received
             @debug_first_chunk_received = true
-            @debug_first_chunk_time = Time.now
-            puts "🧠 [DEBUG] First LLM chunk received in #{((@debug_first_chunk_time - @debug_llm_start) * 1000).round(0)}ms"
+            log_timing("First LLM response received")
+            
+            if ENV['DEBUG']
+              @debug_first_chunk_time = Time.now
+              puts "🧠 [DEBUG] First LLM chunk received in #{((@debug_first_chunk_time - @debug_llm_start) * 1000).round(0)}ms"
+            end
           end
           
           # Stream chunk to TTS and display
@@ -249,11 +258,15 @@ class HotelAutoVoiceAgent
           STDOUT.flush
           agent_reply += chunk
           
-          # Debug timing: First audio sent to TTS
-          if ENV['DEBUG'] && !@debug_first_audio_sent
+          # T6: First text chunk sent to TTS
+          if !@debug_first_audio_sent
             @debug_first_audio_sent = true
-            @debug_first_audio_time = Time.now
-            puts "🔊 [DEBUG] First text sent to TTS in #{((@debug_first_audio_time - @debug_llm_start) * 1000).round(0)}ms"
+            log_timing("First text chunk sent to TTS")
+            
+            if ENV['DEBUG']
+              @debug_first_audio_time = Time.now
+              puts "🔊 [DEBUG] First text sent to TTS in #{((@debug_first_audio_time - @debug_llm_start) * 1000).round(0)}ms"
+            end
           end
           
           @audio_processor.stream_text_chunk(chunk, false)

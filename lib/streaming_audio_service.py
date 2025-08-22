@@ -12,15 +12,39 @@ import tempfile
 import os
 import threading
 import queue
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import asyncio
 import numpy as np
 import soundfile as sf
 from typing import Optional, Callable, Dict, Any
 import logging
 
-# Set up logging
+# Set up logging first
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Always import basic HTTP server for fallback
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# FastAPI imports for robust HTTP server
+try:
+    from fastapi import FastAPI, HTTPException, BackgroundTasks
+    from fastapi.responses import JSONResponse
+    from pydantic import BaseModel
+    import uvicorn
+    fastapi_available = True
+    logger.info("✅ FastAPI available for HTTP server")
+except ImportError:
+    fastapi_available = False
+    logger.warning("⚠️ FastAPI not available, using basic HTTP server")
+
+# Pydantic models for FastAPI
+if fastapi_available:
+    class TranscribeFileRequest(BaseModel):
+        audio_file: str
+    
+    class StreamingResponse(BaseModel):
+        status: str
+        message: Optional[str] = None
 
 try:
     import pyaudio
@@ -110,6 +134,12 @@ class StreamingAudioService:
         self.last_speech_time = 0
         self.speech_start_time = 0
         self.processing_lock = threading.Lock()
+        self.state_lock = threading.Lock()  # For thread-safe state management
+        self.starting_up = False  # Prevent concurrent startup attempts
+        
+        # Timing debug state
+        self.timing_baseline = None  # Set when silence is detected (T0)
+        self.debug_timing_enabled = os.environ.get('DEBUG_TIMING', '0') == '1'
         
         # Real-time capture setup
         if audio_capture_available:
@@ -129,25 +159,46 @@ class StreamingAudioService:
         
         logger.info("✅ Streaming Audio Service ready")
     
+    def log_timing(self, event_name: str, reset_baseline: bool = False):
+        """Log timing event relative to baseline (silence detection)"""
+        if not self.debug_timing_enabled:
+            return
+            
+        current_time = time.time()
+        
+        if reset_baseline or self.timing_baseline is None:
+            self.timing_baseline = current_time
+            elapsed_ms = 0
+        else:
+            elapsed_ms = int((current_time - self.timing_baseline) * 1000)
+        
+        logger.info(f"⏱️  [T+{elapsed_ms}ms] {event_name}")
+    
     def start_realtime_capture(self, callback: Callable[[str, float], None]):
         """Start real-time audio capture and streaming transcription"""
         if not audio_capture_available:
             raise RuntimeError("PyAudio not available for real-time capture")
         
-        if self.is_streaming:
-            logger.warning("⚠️ Already streaming")
-            return
-        
-        logger.info("🎤 Starting real-time audio capture...")
-        
-        self.is_streaming = True
-        self.audio_buffer = []
-        self.callback = callback
-        
-        # Initialize PyAudio
-        self.pyaudio_instance = pyaudio.PyAudio()
+        with self.state_lock:
+            if self.is_streaming:
+                logger.warning("⚠️ Already streaming")
+                return
+            
+            if self.starting_up:
+                logger.warning("⚠️ Streaming startup already in progress")
+                return
+                
+            self.starting_up = True
         
         try:
+            logger.info("🎤 Starting real-time audio capture...")
+            
+            self.is_streaming = True
+            self.audio_buffer = []
+            self.callback = callback
+        
+            # Initialize PyAudio
+            self.pyaudio_instance = pyaudio.PyAudio()
             # Open audio stream with minimal latency settings
             self.audio_stream = self.pyaudio_instance.open(
                 format=pyaudio.paInt16,
@@ -178,15 +229,18 @@ class StreamingAudioService:
             logger.error(f"❌ Failed to start audio capture: {e}")
             self.stop_realtime_capture()
             raise
+        finally:
+            with self.state_lock:
+                self.starting_up = False
     
     def stop_realtime_capture(self):
         """Stop real-time audio capture"""
-        if not self.is_streaming:
-            return
-        
-        logger.info("🛑 Stopping real-time capture...")
-        
-        self.is_streaming = False
+        with self.state_lock:
+            if not self.is_streaming:
+                return
+            
+            logger.info("🛑 Stopping real-time capture...")
+            self.is_streaming = False
         
         # Process any remaining audio
         if self.audio_buffer:
@@ -305,6 +359,9 @@ class StreamingAudioService:
             return
         
         try:
+            # T0: Silence detected - set timing baseline
+            self.log_timing("Silence detected, starting STT processing", reset_baseline=True)
+            
             # Convert buffer to numpy array
             audio_data = np.array(self.audio_buffer, dtype=np.int16)
             audio_duration = len(audio_data) / self.sample_rate
@@ -361,6 +418,9 @@ class StreamingAudioService:
             transcription = self._transcribe_with_whisper(temp_file.name)
             processing_time = time.time() - start_time
             
+            # T1: STT processing complete
+            self.log_timing(f"STT transcription complete: '{transcription[:50]}{'...' if len(transcription) > 50 else ''}'")
+            
             # Clean up temp file
             os.unlink(temp_file.name)
             
@@ -407,6 +467,8 @@ class StreamingAudioService:
             
             # Call callback if transcription is not empty
             if clean_text and hasattr(self, 'callback') and self.callback:
+                # T2: STT callback triggered
+                self.log_timing("STT callback triggered in Ruby")
                 self.callback(clean_text, audio_duration)
                 
         except Exception as e:
@@ -627,6 +689,88 @@ class StreamingAudioService:
         }
 
 
+def create_fastapi_app(service: StreamingAudioService) -> FastAPI:
+    """Create FastAPI application with all endpoints"""
+    if not fastapi_available:
+        raise RuntimeError("FastAPI not available")
+    
+    app = FastAPI(title="Streaming Audio Service", version="1.0.0")
+    
+    @app.get("/health")
+    async def health_check():
+        """Health check endpoint"""
+        return {"status": "healthy", "service": "streaming_audio"}
+    
+    @app.get("/status")
+    async def get_status():
+        """Get service status"""
+        return service.get_status()
+    
+    @app.get("/results")
+    async def get_results():
+        """Get pending transcription results"""
+        results = service.get_transcription_results()
+        return {"status": "success", "results": results, "count": len(results)}
+    
+    @app.post("/transcribe_file")
+    async def transcribe_file(request: TranscribeFileRequest):
+        """Handle file transcription request"""
+        try:
+            if not request.audio_file:
+                raise HTTPException(status_code=400, detail="No audio_file provided")
+            
+            result = service.transcribe_file(request.audio_file)
+            return result
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+    
+    @app.post("/start_streaming")
+    async def start_streaming(background_tasks: BackgroundTasks):
+        """Handle start streaming request"""
+        try:
+            def transcription_callback(text, duration):
+                logger.info(f"🎯 Transcription ready: '{text}' ({duration:.2f}s)")
+            
+            # Run the capture startup in current thread to ensure proper error handling
+            service.start_realtime_capture(transcription_callback)
+            return {"status": "streaming_started"}
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.post("/stop_streaming")
+    async def stop_streaming():
+        """Handle stop streaming request"""
+        try:
+            service.stop_realtime_capture()
+            return {"status": "streaming_stopped"}
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.post("/reset_audio")
+    async def reset_audio():
+        """Handle audio stream reset request"""
+        try:
+            # Stop current capture
+            service.stop_realtime_capture()
+            
+            # Clear any buffered results
+            service.clear_result_queue()
+            
+            # Reset audio stream state
+            logger.info("🔄 Audio stream reset requested")
+            
+            return {"status": "audio_reset_complete"}
+            
+        except Exception as e:
+            logger.error(f"❌ Audio reset error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    return app
+
+
 class StreamingAudioHTTPHandler(BaseHTTPRequestHandler):
     """HTTP request handler for streaming audio service"""
 
@@ -730,14 +874,35 @@ def start_server(host='127.0.0.1', port=8769, model_name='tiny', language=None):
     try:
         service = StreamingAudioService(model_name, language)
         
-        server = HTTPServer((host, port), StreamingAudioHTTPHandler)
-        server.service = service
-        
         logger.info(f"🌐 Streaming Audio Service starting on {host}:{port}")
         logger.info(f"📋 Model: {model_name}, Language: {language or 'auto-detect'}")
-        logger.info("✅ Service ready for requests")
         
-        server.serve_forever()
+        if fastapi_available:
+            logger.info("🚀 Using FastAPI for robust HTTP handling")
+            app = create_fastapi_app(service)
+            
+            # Configure uvicorn for production use
+            config = uvicorn.Config(
+                app=app,
+                host=host,
+                port=port,
+                log_level="info",
+                access_log=False,  # Reduce noise
+                loop="asyncio",
+                workers=1,  # Single worker for shared state
+                timeout_keep_alive=30,
+                timeout_graceful_shutdown=10
+            )
+            
+            server = uvicorn.Server(config)
+            logger.info("✅ Service ready for requests")
+            server.run()
+        else:
+            logger.info("⚠️ Using basic HTTP server (FastAPI not available)")
+            server = HTTPServer((host, port), StreamingAudioHTTPHandler)
+            server.service = service
+            logger.info("✅ Service ready for requests")
+            server.serve_forever()
         
     except KeyboardInterrupt:
         logger.info("\n🛑 Server shutting down...")
